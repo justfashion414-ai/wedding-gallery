@@ -1,0 +1,101 @@
+{
+  "entities": {
+    "AppConfig": {
+      "title": "App Configuration",
+      "description": "Global settings for the application, managed by Admin.",
+      "type": "object",
+      "properties": {
+        "activeAccessCode": { "type": "string", "description": "The current code required to post." },
+        "heroImages": { "type": "array", "description": "URLs for the auto-scrolling hero section." },
+        "estateWebsiteUrl": { "type": "string", "description": "Link to the main estate website." },
+        "postAds": { "type": "array", "description": "Ads shuffled in-between the post feed after every 5 posts." },
+        "reelAds": { "type": "array", "description": "Video ads placed in-between every 3 reels in the reels feed." },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["activeAccessCode"]
+    },
+    "ResidentProfile": {
+      "title": "Resident Profile",
+      "description": "Public profile info for an anonymous resident.",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string", "maxLength": 50 },
+        "photoUrl": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["updatedAt"]
+    },
+    "CommunityPost": {
+      "title": "Community Post",
+      "description": "A memory or update shared on the estate feed.",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "authorName": { "type": "string" },
+        "authorPhoto": { "type": "string" },
+        "text": { "type": "string", "maxLength": 1000 },
+        "mediaUrl": { "type": "string" },
+        "mediaUrls": { "type": "array", "items": { "type": "string" } },
+        "mediaTypes": { "type": "array", "items": { "type": "string" } },
+        "videoOrientation": { "type": "string", "enum": ["portrait", "landscape"] },
+        "likeCount": { "type": "number" },
+        "loveCount": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "timestamp"]
+    },
+    "AdminUser": {
+      "title": "Admin User",
+      "description": "A user with administrative privileges.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "canDeletePosts": { "type": "boolean" },
+            "canUploadImages": { "type": "boolean" },
+            "canSetAccessCode": { "type": "boolean" }
+          }
+        },
+        "addedAt": { "type": "string", "format": "date-time" },
+        "addedBy": { "type": "string" }
+      },
+      "required": ["email", "permissions"]
+    },
+    "DeletedPost": {
+      "title": "Deleted Post",
+      "description": "A post moved to the recycle bin.",
+      "type": "object",
+      "properties": {
+        "originalId": { "type": "string" },
+        "postData": { "$ref": "#/entities/CommunityPost" },
+        "deletedAt": { "type": "string", "format": "date-time" },
+        "deletedBy": { "type": "string" }
+      },
+      "required": ["originalId", "postData", "deletedAt"]
+    }
+  },
+  "firestore": {
+    "/app_config/{configId}": {
+      "schema": "AppConfig",
+      "description": "Global configuration settings."
+    },
+    "/residents/{uid}": {
+      "schema": "ResidentProfile",
+      "description": "Resident display identities."
+    },
+    "/posts/{postId}": {
+      "schema": "CommunityPost",
+      "description": "Community wall memories."
+    },
+    "/admins/{email}": {
+      "schema": "AdminUser",
+      "description": "List of authorized administrators."
+    },
+    "/deleted_posts/{postId}": {
+      "schema": "DeletedPost",
+      "description": "Recycle bin for posts (3-day retention)."
+    }
+  }
+}

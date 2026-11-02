@@ -1,0 +1,88 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. HELPERS
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSessionValid() {
+      return isSignedIn() && 
+             request.auth.token.auth_time != null &&
+             (request.time.toMillis() / 1000 - int(request.auth.token.auth_time) < 3600); // 1 hour
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "justfashion414@gmail.com" ||
+        request.auth.uid == "p8BAKdDJEaYYJy0lHuQtzyntynr1"
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.token.email)) && isSessionValid();
+    }
+
+    function getAdminData() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.token.email)).data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 2. PUBLIC READ COLLECTIONS
+    match /app_config/{configId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canSetAccessCode == true);
+    }
+
+    match /residents/{uid} {
+      allow read: if true;
+      allow write: if (isSignedIn() && request.auth.uid == uid && isValidId(uid)) || isSuperAdmin();
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if isSignedIn() && (
+        (request.resource.data.authorUid == request.auth.uid) ||
+        isSuperAdmin() || 
+        (isAdmin() && getAdminData().permissions.canDeletePosts == true)
+      ) && (request.resource.data.text is string || request.resource.data.mediaUrls is list);
+      allow update: if isSuperAdmin() || 
+                       (isAdmin() && getAdminData().permissions.canDeletePosts == true) || 
+                       (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'loveCount', 'reports']));
+      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+
+      match /reactions/{userId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && request.auth.uid == userId && 
+                      request.resource.data.keys().hasOnly(['like', 'love', 'updatedAt']) &&
+                      (request.resource.data.get('like', false) is bool) &&
+                      (request.resource.data.get('love', false) is bool);
+      }
+    }
+
+    match /{path=**}/reactions/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /admins/{email} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    match /deleted_posts/{postId} {
+      allow read: if isSuperAdmin() || isAdmin();
+      allow create: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+      allow update: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+    }
+
+    // 3. GLOBAL SAFETY NET (Last match wins if others don't allow)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

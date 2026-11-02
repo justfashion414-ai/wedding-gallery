@@ -1,0 +1,208 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Sora:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'DM Sans', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Sora', sans-serif;
+  
+  /* Anniversary Design Sample Colors */
+  --color-ann-bg: #EEEDF3;
+  --color-ann-surface: #FFFFFF;
+  --color-ann-ink: #14262D;
+  --color-ann-muted: #5A6970;
+  --color-ann-line: #DAD8E3;
+  --color-ann-accent: #0E6B75;
+  --color-ann-soft: #E1EFF0;
+  --color-ann-heart: #D23B5F;
+  --color-ann-hero: #0B3A43;
+  --color-ann-mint: #0E6B75;
+
+  /* Natural Tones Inspired Colors */
+  --color-estate-primary: #2C3C28;
+  --color-estate-secondary: #1C2318;
+  --color-estate-accent: #B45309;
+  --color-estate-accent-hover: #2C3C28;
+  --color-estate-cream: #FDFCF7;
+  --color-estate-clay: #EFECE3;
+  --color-estate-sage: #3D4F37;
+  --color-estate-charcoal: #1C2318;
+}
+
+@keyframes floatUpInfinite {
+  0% { transform: translate3d(0, 120vh, 0) rotate(var(--rotate, 0deg)); }
+  100% { transform: translate3d(0, -180vh, 0) rotate(var(--rotate, 0deg)); }
+}
+
+@keyframes sheen {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+.animate-sheen {
+  background: linear-gradient(115deg, #fff 5%, #E6DCFB 30%, #BDE8EB 55%, #F7DFC9 80%, #fff 100%);
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: sheen 2.2s ease-out 1 both;
+}
+
+/* Base resets & additions */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-family: var(--font-sans);
+  }
+  
+  body {
+    background-color: var(--color-estate-cream);
+    color: var(--color-estate-secondary);
+    overflow-x: hidden;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+}
+
+/* Glassmorphism Classes styled for Natural Tones */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.5); /* Matching bg-white/50 from Natural Tones design */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.6); /* border-white/60 from design */
+}
+
+.glass-panel-dark {
+  background: rgba(44, 51, 39, 0.85); /* Deep Forest Charcoal with opacity */
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Elegant Natural Tones forest glow instead of golden glow */
+.gold-glow {
+  box-shadow: 0 0 25px rgba(74, 93, 69, 0.12);
+}
+
+.gold-glow-hover:hover {
+  box-shadow: 0 0 35px rgba(74, 93, 69, 0.25);
+}
+
+/* Hide scrollbars for cinematic sliders */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom premium scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-estate-cream);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-estate-sage);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-estate-primary);
+}
+
+/* Infinite Horizontal Marquee */
+@keyframes marquee-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee-infinite {
+  display: flex;
+  width: max-content;
+  animation: marquee-scroll 90s linear infinite;
+}
+
+.animate-marquee-infinite:hover {
+  animation-play-state: paused;
+}
+
+/* Rolling Floating Images Animation */
+@keyframes float-roll {
+  0% {
+    left: -350px;
+    transform: rotate(0deg) translateY(0px);
+  }
+  25% {
+    transform: rotate(90deg) translateY(-30px);
+  }
+  50% {
+    transform: rotate(180deg) translateY(20px);
+  }
+  75% {
+    transform: rotate(270deg) translateY(-20px);
+  }
+  100% {
+    left: 100%;
+    transform: rotate(360deg) translateY(0px);
+  }
+}
+
+.animate-float-roll {
+  position: absolute;
+  animation: float-roll 22s linear infinite;
+}
+
+/* Falling Flowers/Petals Animation */
+@keyframes fall-sway {
+  0% {
+    top: -50px;
+    transform: translateX(0px) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.9;
+  }
+  90% {
+    opacity: 0.9;
+  }
+  100% {
+    top: 100%;
+    transform: translateX(120px) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+.animate-fall-sway {
+  position: absolute;
+  animation: fall-sway 10s linear infinite;
+}
+
+
+
+
+/* Vertical Scrolling Grid Animations */
+@keyframes scroll-vertical {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-50%); }
+}
+
+@keyframes scroll-vertical-reverse {
+  0% { transform: translateY(-50%); }
+  100% { transform: translateY(0); }
+}
+
+.animate-scroll-vertical-slow {
+  animation: scroll-vertical 40s linear infinite;
+}
+
+.animate-scroll-vertical-reverse {
+  animation: scroll-vertical-reverse 50s linear infinite;
+}
