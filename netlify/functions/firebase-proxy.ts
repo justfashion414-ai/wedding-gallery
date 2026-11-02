@@ -95,7 +95,14 @@ export const handler = async (event: any) => {
   try {
     const sa = await getServiceAccountWithToken();
     const params = event.queryStringParameters || {};
-    const target: string = params.target || '';
+
+    // Prefer the query-param target, else derive it from the original request path
+    let target: string = params.target || '';
+    if (!target && typeof event.path === 'string') {
+      const p = event.path.replace(/^\/+/, '');
+      const marker = 'api/firebase/';
+      if (p.startsWith(marker)) target = p.slice(marker.length);
+    }
 
     if (!target) {
       return json(200, { ok: true, projectId: sa.project_id, services: ['firestore', 'storage'] });
@@ -107,11 +114,13 @@ export const handler = async (event: any) => {
 
     let url = '';
     if (service === 'firestore') {
-      const db = params.db || '(default)';
-      url = 'https://firestore.googleapis.com/v1/projects/' + sa.project_id + '/databases/' + db + '/documents/' + subPath;
+      url = subPath.startsWith('databases/')
+        ? 'https://firestore.googleapis.com/v1/projects/' + sa.project_id + '/' + subPath
+        : 'https://firestore.googleapis.com/v1/projects/' + sa.project_id + '/databases/' + (params.db || '(default)') + '/documents/' + subPath;
     } else if (service === 'storage') {
-      const bucket = params.bucket || sa.project_id + '.firebasestorage.app';
-      url = 'https://firebasestorage.googleapis.com/v0/b/' + bucket + '/' + subPath;
+      url = subPath.startsWith('b/')
+        ? 'https://firebasestorage.googleapis.com/v0/' + subPath
+        : 'https://firebasestorage.googleapis.com/v0/b/' + (params.bucket || sa.project_id + '.firebasestorage.app') + '/' + subPath;
     } else {
       return json(400, { error: 'unsupported service: ' + service });
     }
