@@ -7,6 +7,19 @@
   node_bundler = "esbuild"
 
 # Route /api/* requests directly to the corresponding Netlify Functions
+# Firebase service-account proxy
+[[redirects]]
+  from = "/api/firebase"
+  to = "/.netlify/functions/firebase-proxy"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/firebase/*"
+  to = "/.netlify/functions/firebase-proxy?target=:splat"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/api/upload-signature"
   to = "/.netlify/functions/upload-signature"
@@ -40,19 +53,6 @@
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
-  status = 200
-  force = true
-
-# Firebase service-account proxy
-[[redirects]]
-  from = "/api/firebase"
-  to = "/.netlify/functions/firebase-proxy"
-  status = 200
-  force = true
-
-[[redirects]]
-  from = "/api/firebase/*"
-  to = "/.netlify/functions/firebase-proxy?target=:splat"
   status = 200
   force = true
 
