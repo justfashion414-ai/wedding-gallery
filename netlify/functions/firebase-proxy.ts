@@ -125,7 +125,7 @@ export const handler = async (event: any) => {
       }
       const versioned = /^(v1[a-z]*\/)/.test(subPath)
         ? subPath
-        : 'v1alpha/' + subPath;
+        : 'v1/' + subPath;
       url = 'https://firebase.googleapis.com/' + versioned;
     } else if (service === 'serviceusage') {
       // Read-only service status lookup
