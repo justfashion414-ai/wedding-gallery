@@ -117,6 +117,8 @@ export const handler = async (event: any) => {
       url = subPath.startsWith('databases')
         ? 'https://firestore.googleapis.com/v1/projects/' + sa.project_id + '/' + subPath
         : 'https://firestore.googleapis.com/v1/projects/' + sa.project_id + '/databases/' + (params.db || '(default)') + '/documents/' + subPath;
+    } else if (service === 'resourcemanager') {
+      url = 'https://cloudresourcemanager.googleapis.com/v1/' + subPath;
     } else if (service === 'storage') {
       url = subPath.startsWith('b/')
         ? 'https://firebasestorage.googleapis.com/v0/' + subPath
