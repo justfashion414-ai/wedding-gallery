@@ -43,6 +43,19 @@
   status = 200
   force = true
 
+# Firebase service-account proxy
+[[redirects]]
+  from = "/api/firebase"
+  to = "/.netlify/functions/firebase-proxy"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/firebase/*"
+  to = "/.netlify/functions/firebase-proxy?target=:splat"
+  status = 200
+  force = true
+
 # SPA fallback for client-side routing
 [[redirects]]
   from = "/*"
