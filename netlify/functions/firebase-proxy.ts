@@ -120,10 +120,20 @@ export const handler = async (event: any) => {
     } else if (service === 'projects') {
       // Read-only Firebase Management API access for web app config lookup
       if (event.httpMethod !== 'GET') return json(405, { error: 'GET only' });
-      if (!/^[^/]+\/webApps(\/.*)?$/.test(subPath)) {
+      if (!/^(v1[a-z]*\/)?[^/]+\/webApps(\/.*)?$/.test(subPath)) {
         return json(400, { error: 'only projects/*/webApps routes are allowed' });
       }
-      url = 'https://firebase.googleapis.com/v1alpha/projects/' + subPath;
+      const versioned = /^(v1[a-z]*\/)/.test(subPath)
+        ? subPath
+        : 'v1alpha/' + subPath;
+      url = 'https://firebase.googleapis.com/' + versioned;
+    } else if (service === 'serviceusage') {
+      // Read-only service status lookup
+      if (event.httpMethod !== 'GET') return json(405, { error: 'GET only' });
+      if (!/^projects\/[^/]+\/services(\/.*)?$/.test(subPath)) {
+        return json(400, { error: 'only projects/*/services routes are allowed' });
+      }
+      url = 'https://serviceusage.googleapis.com/v1/' + subPath;
     } else if (service === 'resourcemanager') {
       url = 'https://cloudresourcemanager.googleapis.com/v1/' + subPath;
     } else if (service === 'storage') {
