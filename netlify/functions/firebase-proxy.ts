@@ -117,13 +117,13 @@ export const handler = async (event: any) => {
       url = subPath.startsWith('databases')
         ? 'https://firestore.googleapis.com/v1/projects/' + sa.project_id + '/' + subPath
         : 'https://firestore.googleapis.com/v1/projects/' + sa.project_id + '/databases/' + (params.db || '(default)') + '/documents/' + subPath;
-    } else if (service === 'firebase') {
+    } else if (service === 'projects') {
       // Read-only Firebase Management API access for web app config lookup
       if (event.httpMethod !== 'GET') return json(405, { error: 'GET only' });
-      if (!/^projects\/[^/]+\/webApps(\/.*)?$/.test(subPath)) {
+      if (!/^[^/]+\/webApps(\/.*)?$/.test(subPath)) {
         return json(400, { error: 'only projects/*/webApps routes are allowed' });
       }
-      url = 'https://firebase.googleapis.com/v1alpha/' + subPath;
+      url = 'https://firebase.googleapis.com/v1alpha/projects/' + subPath;
     } else if (service === 'resourcemanager') {
       url = 'https://cloudresourcemanager.googleapis.com/v1/' + subPath;
     } else if (service === 'storage') {
