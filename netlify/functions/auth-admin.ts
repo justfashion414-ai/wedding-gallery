@@ -140,11 +140,12 @@ async function publishRules(): Promise<{ rulesetName: string; releaseName: strin
   const created = await createRes.json().catch(() => ({}));
   if (!createRes.ok) throw new Error(`ruleset create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 400)}`);
   const rulesetName = created.name;
-  const relRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=rulesetName`, {
+  const patchRelease = () => fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=release.rulesetName`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ rulesetName })
+    body: JSON.stringify({ release: { rulesetName } })
   });
+  let relRes = await patchRelease();
   const released = await relRes.json().catch(() => ({}));
   let releaseName = released.name as string | undefined;
   if (!relRes.ok) {
@@ -155,8 +156,14 @@ async function publishRules(): Promise<{ rulesetName: string; releaseName: strin
       body: JSON.stringify({ name: `projects/${PROJECT_ID}/releases/cloud.firestore`, rulesetName })
     });
     const created = await createRes.json().catch(() => ({}));
-    if (!createRes.ok) throw new Error(`release update failed: ${relRes.status} ${JSON.stringify(released).slice(0, 200)}; create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 400)}`);
-    releaseName = created.name;
+    if (createRes.ok) {
+      releaseName = created.name;
+    } else {
+      relRes = await patchRelease();
+      const retried = await relRes.json().catch(() => ({}));
+      if (!relRes.ok) throw new Error(`release update failed: ${relRes.status} ${JSON.stringify(retried).slice(0, 400)}`);
+      releaseName = retried.name;
+    }
   }
   return { rulesetName, releaseName: releaseName || `projects/${PROJECT_ID}/releases/cloud.firestore` };
 }
