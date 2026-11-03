@@ -161,7 +161,7 @@ export const handler = async (event: any) => {
       }
       const created = await identityRequest('/accounts:signUp', { email, password });
       if (!created.ok) {
-        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || 'Could not create the account' + (created.data ? ` (${JSON.stringify(created.data).slice(0, 200)})` : '') });
+        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || ('Could not create the account (status ' + created.status + (created.data ? ', ' + JSON.stringify(created.data).slice(0, 200) : '') + ')') });
       }
       await setAdminDoc(email, 'admin');
       return json(200, { ok: true, localId: created.data.localId });
@@ -188,7 +188,7 @@ export const handler = async (event: any) => {
       }
       const created = await identityRequest('/accounts:signUp', { email, password });
       if (!created.ok) {
-        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || 'Could not create the account' + (created.data ? ` (${JSON.stringify(created.data).slice(0, 200)})` : '') });
+        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || ('Could not create the account (status ' + created.status + (created.data ? ', ' + JSON.stringify(created.data).slice(0, 200) : '') + ')') });
       }
       await setAdminDoc(email, body.role === 'guest' ? 'guest' : 'vendor');
       return json(200, { ok: true, localId: created.data.localId });
