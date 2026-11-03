@@ -146,8 +146,19 @@ async function publishRules(): Promise<{ rulesetName: string; releaseName: strin
     body: JSON.stringify({ rulesetName })
   });
   const released = await relRes.json().catch(() => ({}));
-  if (!relRes.ok) throw new Error(`release update failed: ${relRes.status} ${JSON.stringify(released).slice(0, 400)}`);
-  return { rulesetName, releaseName: released.name || `projects/${PROJECT_ID}/releases/cloud.firestore` };
+  let releaseName = released.name as string | undefined;
+  if (!relRes.ok) {
+    // A project that has never published rules has no release yet; create it.
+    const createRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name: `projects/${PROJECT_ID}/releases/cloud.firestore`, rulesetName })
+    });
+    const created = await createRes.json().catch(() => ({}));
+    if (!createRes.ok) throw new Error(`release update failed: ${relRes.status} ${JSON.stringify(released).slice(0, 200)}; create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 400)}`);
+    releaseName = created.name;
+  }
+  return { rulesetName, releaseName: releaseName || `projects/${PROJECT_ID}/releases/cloud.firestore` };
 }
 
 async function addAuthorizedDomain(domain: string): Promise<{ ok: boolean; detail: string }> {
