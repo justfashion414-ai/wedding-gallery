@@ -39,7 +39,7 @@ import {
 } from 'lucide-react';
 import { db, auth } from '../lib/firebase';
 import { get, set, del } from 'idb-keyval';
-import { signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, updatePassword, signOut } from 'firebase/auth';
 import { 
   collection, 
   query, 
@@ -63,6 +63,7 @@ import {
   ShieldCheck, 
   RefreshCw,
   Save
+Eye, EyeOff, KeyRound, MessageCircle,
 } from 'lucide-react';
 
 enum OperationType {
@@ -345,6 +346,19 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [accessCode, setAccessCode] = useState('');
   const [attachedMedia, setAttachedMedia] = useState<{url: string, id: string, type?: 'image' | 'video', orientation?: 'portrait' | 'landscape'}[]>([]);
   const [showProfilePrompt, setShowProfilePrompt] = useState(false);
+
+  // Email/password admin auth state
+  const [authScreen, setAuthScreen] = useState<null | 'signin' | 'forgot' | 'sent'>(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [mustSetPassword, setMustSetPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [setPasswordBusy, setSetPasswordBusy] = useState(false);
 
   
   // Firebase & Profile State
@@ -635,7 +649,9 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       if (snap.exists()) {
         setIsAdmin(true);
         setAdminPermissions(snap.data().permissions);
+        setMustSetPassword(!!snap.data().mustSetPassword);
       } else if (isSuper) {
+        setMustSetPassword(false);
         setIsAdmin(true);
         setAdminPermissions({ 
           canDeletePosts: true, 
@@ -828,14 +844,83 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }
   }, [isAdmin, isAdminSessionValid, user]);
 
-  // Handle Admin Login
-  const handleAdminLogin = async () => {
-    const provider = new GoogleAuthProvider();
+  // Handle Admin Login (email & password)
+  const handleAdminLogin = async (email: string, password: string) => {
+    setAuthError('');
+    setAuthBusy(true);
     try {
-      await signInWithPopup(auth, provider);
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      setAuthScreen(null);
+      setAuthPassword('');
+      setAuthEmail('');
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code.includes('wrong-password') || code.includes('user-not-found') || code.includes('invalid-credential')) {
+        setAuthError('Email or password is incorrect.');
+      } else if (code.includes('too-many-requests')) {
+        setAuthError('Too many attempts. Try again in a moment.');
+      } else {
+        setAuthError('Could not sign in. Please try again.');
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleAdminSignup = async (email: string, password: string) => {
+    setAuthError('');
+    setAuthBusy(true);
+    try {
+      await createUserWithEmailAndPassword(auth, email.trim(), password);
+      setAuthScreen(null);
+      setAuthPassword('');
+      setAuthEmail('');
+      showToast('Admin account created.', 'success');
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code.includes('email-already-in-use')) {
+        setAuthError('That email already has an account. Sign in instead.');
+      } else if (code.includes('weak-password')) {
+        setAuthError('Password is too weak. Use at least 6 characters.');
+      } else {
+        setAuthError('Could not create the account. Please try again.');
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleForgotPassword = async (email: string) => {
+    setAuthError('');
+    setAuthBusy(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      setAuthScreen('sent');
+    } catch (err: any) {
+      const code = err?.code || '';
+      setAuthError(code.includes('user-not-found') ? 'No account found for that email.' : 'Could not send the reset email. Please try again.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSetPermanentPassword = async () => {
+    if (newPassword.length < 6) { setAuthError('Use at least 6 characters.'); return; }
+    if (newPassword !== confirmNewPassword) { setAuthError('The two passwords do not match.'); return; }
+    setAuthError('');
+    setSetPasswordBusy(true);
+    try {
+      if (user) await updatePassword(user, newPassword);
+      if (user?.email) await setDoc(doc(db, 'admins', user.email), { mustSetPassword: false }, { merge: true });
+      setMustSetPassword(false);
+      setNewPassword('');
+      setConfirmNewPassword('');
+      showToast('Permanent password saved. Welcome in!', 'success');
     } catch (err) {
-      console.error("Login error:", err);
-      showToast("Login failed. Use justfashion414@gmail.com", "error");
+      console.error('Set password error:', err);
+      setAuthError('Could not update the password. Sign out, sign in again, then try.');
+    } finally {
+      setSetPasswordBusy(false);
     }
   };
 
@@ -1592,14 +1677,23 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 <div className="border-t-[6px] border-[#D0CEDB] dark:border-[#1E323A]">
                   <p className={`py-6 text-center text-[0.7rem] font-black uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample reels · guest videos appear here</p>
                   <div className="grid grid-cols-2 gap-2 p-4">
-                    {PLACEHOLDER_IMAGES.slice(0, 4).map((src, idx) => (
-                      <div key={idx} className="relative aspect-[9/16] rounded-2xl overflow-hidden border border-[#DAD8E3] dark:border-[#22363E]">
-                        <img src={src} className="w-full h-full object-cover" alt="Sample reel" />
-                        <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
-                          <Play className="w-10 h-10 text-white drop-shadow-lg" />
+                    {SAMPLE_POSTS.filter((sp) => sp.mediaType === 'reel').concat(SAMPLE_POSTS.filter((sp) => sp.mediaType === 'video')).slice(0, 4).map((sp, idx) => {
+                      const [c1, c2] = (SAMPLE_TILE_COLORS[sp.tileColor] || SAMPLE_TILE_COLORS[0]).split(',');
+                      return (
+                        <div key={idx} className="relative aspect-[9/16] rounded-2xl overflow-hidden" style={{ background: `linear-gradient(160deg, ${c1}, ${c2})` }}>
+                          <div className="absolute inset-0 opacity-30" style={{ background: 'radial-gradient(circle at 70% 20%, rgba(255,255,255,0.35), transparent 60%)' }} />
+                          <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
+                            <div className="w-12 h-12 rounded-full bg-white/25 border border-white/50 backdrop-blur-sm flex items-center justify-center">
+                              <Play className="w-6 h-6 text-white ml-0.5" />
+                            </div>
+                          </div>
+                          <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/60 to-transparent">
+                            <p className="text-white font-bold text-[0.8rem] truncate">{sp.authorName}</p>
+                            <p className="text-white/80 text-[0.68rem] truncate">{sp.text}</p>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
@@ -1786,7 +1880,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     onClick={() => {
                       const newCount = aboutClickCount + 1;
                       if (newCount >= 3) {
-                        handleAdminLogin();
+                        setAuthScreen('signin');
                         setAboutClickCount(0);
                       } else {
                         setAboutClickCount(newCount);
@@ -1834,6 +1928,11 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         onClose={() => setIsAdminDashboardOpen(false)}
         activeCode={activeAccessCode}
         onUpdateCode={updateAccessCode}
+        posts={posts}
+        onDeletePost={(id: string) => {
+          setIsAdminDashboardOpen(false);
+          setPostToDelete(id);
+        }}
         isDarkMode={isDarkMode}
         heroImages={heroImages}
         onUpdateHeroImages={async (urls: string[]) => {
@@ -2185,9 +2284,47 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[141] max-w-[86vw] max-h-[80vh] object-contain rounded-2xl shadow-2xl cursor-pointer"
               alt="Memory"
             />
+            <motion.button
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setFooterLightbox(null)}
+              className="fixed top-5 right-5 z-[142] flex items-center gap-2 px-4 py-2.5 rounded-full bg-white/15 text-white border border-white/40 backdrop-blur-md text-xs font-black uppercase tracking-widest hover:bg-white/25 transition-colors"
+            >
+              <X className="w-4 h-4" /> Cancel
+            </motion.button>
           </>
         )}
       </AnimatePresence>
+
+      {/* Admin email/password auth screens */}
+      {authScreen && (
+        <AuthScreen
+          screen={authScreen}
+          setScreen={setAuthScreen}
+          onClose={() => { setAuthScreen(null); setAuthError(''); }}
+          onSignIn={handleAdminLogin}
+          onSignup={handleAdminSignup}
+          onForgot={handleForgotPassword}
+          busy={authBusy}
+          error={authError}
+          clearError={() => setAuthError('')}
+          isDarkMode={isDarkMode}
+        />
+      )}
+      {user && !user.isAnonymous && mustSetPassword && !authScreen && (
+        <ForceSetPasswordScreen
+          isDarkMode={isDarkMode}
+          busy={setPasswordBusy}
+          error={authError}
+          newPassword={newPassword}
+          setNewPassword={setNewPassword}
+          confirmPassword={confirmNewPassword}
+          setConfirmPassword={setConfirmNewPassword}
+          onSubmit={handleSetPermanentPassword}
+          onSignOut={() => { signOut(auth); setMustSetPassword(false); setAuthError(''); }}
+        />
+      )}
 
       {/* Bottom Nav - DYNAMIC FEED/SEND BUTTON */}
       <nav className={`fixed left-1/2 bottom-0 -translate-x-1/2 w-full max-w-[520px] z-[90] grid grid-cols-3 items-end p-[8px_12px_calc(8px+env(safe-area-inset-bottom,0px))] border-t transition-colors ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
@@ -3215,35 +3352,75 @@ function ReelCard({
   );
 }
 
+// Sample placeholder palette matching the prototype feed (gradient tiles, no stock imagery)
+const SAMPLE_TILE_COLORS = [
+  '#d98e3c,#8a3b1d', '#3d8fb3,#1c3f6e', '#7bb36b,#2c6b45', '#c46bb0,#5b2a7a',
+  '#0e6b75,#073d31', '#c8932a,#7a4a14', '#d23b5e,#7a1730', '#2b5fb3,#173769',
+];
+
 const SAMPLE_POSTS = [
-  { id: 'sample-1', authorName: 'Aunty Bisi', text: 'The introduction was beautiful! Dara, you looked absolutely stunning. Counting down to December!', mediaUrls: [PLACEHOLDER_IMAGES[0]], mediaTypes: ['image'], likeCount: 24, loveCount: 9 },
-  { id: 'sample-2', authorName: 'Tunde A.', text: 'Saved the date! December 12th, Lagos. Nobody should miss this one.', mediaUrls: [PLACEHOLDER_IMAGES[1]], mediaTypes: ['image'], likeCount: 13, loveCount: 5 },
-  { id: 'sample-3', authorName: 'Chidinma O.', text: 'Aso-ebi colors are so gorgeous. Emerald green and gold forever.', mediaUrls: [PLACEHOLDER_IMAGES[2]], mediaTypes: ['image'], likeCount: 31, loveCount: 12 },
-  { id: 'sample-4', authorName: 'The Adewale Family', text: 'We are so happy to welcome Femi into the family. Wishing you both a lifetime of joy.', mediaUrls: [PLACEHOLDER_IMAGES[3]], mediaTypes: ['image'], likeCount: 47, loveCount: 28 },
-  { id: 'sample-5', authorName: 'Kemi & Dayo', text: 'From the first introduction to the last dance, we will be there for every moment!', mediaUrls: [PLACEHOLDER_IMAGES[4]], mediaTypes: ['image'], likeCount: 19, loveCount: 7 },
+  { id: 'sample-1', authorName: 'Aunty Ronke', eventName: 'Introduction', text: 'Dara walking in with her aunties.', tileColor: 0, mediaType: 'image', likeCount: 14, commentCount: 0, timeAgo: '4 months ago' },
+  { id: 'sample-2', authorName: 'Tolu', eventName: 'Engagement', text: 'The moment Femi went down on one knee!', tileColor: 1, mediaType: 'video', likeCount: 42, commentCount: 2, timeAgo: '3 months ago' },
+  { id: 'sample-3', authorName: 'Kiln Films', eventName: 'Engagement', text: 'Engagement highlight reel.', tileColor: 2, mediaType: 'reel', likeCount: 27, commentCount: 1, timeAgo: '3 months ago' },
+  { id: 'sample-4', authorName: 'Chidi', eventName: 'Court Wedding', text: 'Femi, my guy. Cheers to forever.', tileColor: 3, mediaType: 'wish', likeCount: 9, commentCount: 0, timeAgo: '2 months ago' },
+  { id: 'sample-5', authorName: 'Lens & Light Studio', eventName: 'Introduction', text: 'Full introduction album, 212 photos.', tileColor: 4, mediaType: 'image', likeCount: 31, commentCount: 1, timeAgo: '4 months ago' },
 ];
 
 function SamplePostCard({ post, isDarkMode }: { post: any; isDarkMode: boolean }) {
+  const [c1, c2] = (SAMPLE_TILE_COLORS[post.tileColor] || SAMPLE_TILE_COLORS[0]).split(',');
+  const isWish = post.mediaType === 'wish';
+  const isMotion = post.mediaType === 'video' || post.mediaType === 'reel';
   return (
-    <div className={`p-4 border-b ${isDarkMode ? 'border-[#1E323A]' : 'border-[#DAD8E3]/70'}`}>
+    <article className={`p-4 border-b ${isDarkMode ? 'border-[#1E323A]' : 'border-[#DAD8E3]/70'}`}>
       <div className="flex items-start gap-3 mb-3">
-        <div className="w-10 h-10 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center font-black text-sm shrink-0">
-          {(post.authorName || 'G').charAt(0)}
+        <div
+          className="w-11 h-11 rounded-2xl flex items-center justify-center text-white text-lg shrink-0 shadow-sm"
+          style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}
+        >
+          {isWish ? '\u275D' : '\u2600'}
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-black text-[0.95rem] truncate">{post.authorName}</p>
-          <p className={`text-[0.7rem] uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample memory</p>
+          <p className={`text-[0.7rem] font-bold ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>
+            {post.eventName} · {post.timeAgo}
+          </p>
         </div>
       </div>
-      <p className="text-[0.95rem] leading-relaxed mb-3">{post.text}</p>
-      <div className={`rounded-2xl overflow-hidden border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-        <img src={post.mediaUrls[0]} className="w-full object-cover" alt="Sample memory" />
+      {!isWish && <p className="text-[0.95rem] leading-relaxed mb-3">{post.text}</p>}
+      {isWish ? (
+        <div className={`rounded-2xl border p-5 text-center ${isDarkMode ? 'border-[#22363E] bg-[#0B171C]' : 'border-[#DAD8E3] bg-[#F6F5FA]'}`}>
+          <p className="font-display text-[1.15rem] italic leading-relaxed">{post.text}</p>
+        </div>
+      ) : (
+        <div
+          className="relative rounded-2xl overflow-hidden aspect-[4/3] flex items-center justify-center"
+          style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}
+        >
+          <div className="absolute inset-0 opacity-30" style={{ background: 'radial-gradient(circle at 70% 20%, rgba(255,255,255,0.35), transparent 60%)' }} />
+          {isMotion ? (
+            <div className="w-14 h-14 rounded-full bg-white/25 border border-white/50 backdrop-blur-sm flex items-center justify-center">
+              <Play className="w-7 h-7 text-white ml-0.5" />
+            </div>
+          ) : (
+            <span className="text-white/70 text-3xl">\u2698</span>
+          )}
+          {isMotion && (
+            <span className="absolute bottom-3 right-3 px-2 py-0.5 rounded-full bg-black/40 text-white text-[0.62rem] font-black uppercase tracking-widest">Reel</span>
+          )}
+        </div>
+      )}
+      <div className={`flex items-center gap-6 mt-3 text-[0.82rem] ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>
+        <span className="flex items-center gap-1.5">
+          <Heart className="w-4 h-4" /> {post.likeCount}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <MessageCircle className="w-4 h-4" /> {post.commentCount}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Share2 className="w-4 h-4" /> Share
+        </span>
       </div>
-      <div className={`flex items-center gap-6 mt-3 text-[0.8rem] ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>
-        <span>♥ {post.likeCount}</span>
-        <span>♥ {post.loveCount}</span>
-      </div>
-    </div>
+    </article>
   );
 }
 
@@ -3365,6 +3542,222 @@ function DeleteConfirmationModal({ isOpen, onClose, onConfirm, isDarkMode }: any
   );
 }
 
+
+function AuthScreen({ screen, setScreen, onClose, onSignIn, onSignup, onForgot, busy, error, clearError, isDarkMode }: {
+  screen: 'signin' | 'forgot' | 'sent';
+  setScreen: (s: 'signin' | 'forgot' | 'sent') => void;
+  onClose: () => void;
+  onSignIn: (email: string, password: string) => void;
+  onSignup: (email: string, password: string) => void;
+  onForgot: (email: string) => void;
+  busy: boolean;
+  error: string;
+  clearError: () => void;
+  isDarkMode: boolean;
+}) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [isFirstTime, setIsFirstTime] = useState(false);
+
+  const submit = () => {
+    if (!email.trim() || !password) { return; }
+    if (isFirstTime) { onSignup(email, password); } else { onSignIn(email, password); }
+  };
+
+  return (
+    <div className={`fixed inset-0 z-[300] flex items-center justify-center p-5 overflow-y-auto ${isDarkMode ? 'bg-[#0B171C]' : 'bg-[#F6F5FA]'}`}>
+      <div className={`w-full max-w-[430px] my-auto rounded-[28px] p-8 shadow-2xl ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}>
+        <button onClick={onClose} className={`mb-5 p-2 -ml-2 rounded-full hover:bg-black/5 ${isDarkMode ? 'text-[#5A6970]' : 'text-[#5A6970]'}`} aria-label="Close">
+          <X className="w-6 h-6" />
+        </button>
+
+        {screen === 'sent' ? (
+          <>
+            <div className="w-16 h-16 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center mx-auto mb-5">
+              <Mail className="w-8 h-8" />
+            </div>
+            <h2 className="text-center text-[1.6rem] font-black font-display tracking-tight mb-2">Check your email</h2>
+            <p className={`text-center text-[0.95rem] leading-relaxed mb-8 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+              We sent a password reset link. Follow it to set a new password, then come back and sign in.
+            </p>
+            <button
+              onClick={() => setScreen('signin')}
+              className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest hover:brightness-110 transition-all"
+            >
+              Back to sign in
+            </button>
+          </>
+        ) : screen === 'forgot' ? (
+          <>
+            <div className="w-16 h-16 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center mx-auto mb-5">
+              <KeyRound className="w-8 h-8" />
+            </div>
+            <h2 className="text-center text-[1.6rem] font-black font-display tracking-tight mb-2">Forgot password?</h2>
+            <p className={`text-center text-[0.95rem] leading-relaxed mb-8 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+              Enter the email on your admin account and we will send a reset link.
+            </p>
+            <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              className={`w-full p-4 rounded-xl border-none outline-none font-bold mb-4 ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+            />
+            {error && <p className="text-[0.85rem] font-bold text-[#C4453B] mb-4">{error}</p>}
+            <button
+              onClick={() => onForgot(email)}
+              disabled={busy || !email.trim()}
+              className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-[#0E6B75]/20 disabled:opacity-50 hover:brightness-110 transition-all"
+            >
+              {busy ? 'Sending…' : 'Send reset link'}
+            </button>
+            <button onClick={() => setScreen('signin')} className={`w-full py-4 font-bold text-xs uppercase tracking-widest ${isDarkMode ? 'text-white/40' : 'text-[#5A6970]'}`}>
+              Back to sign in
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="text-center mb-8">
+              <p className="font-display text-[#0E6B75] text-[0.85rem] font-medium mb-1">Dara &amp; Femi 2026</p>
+              <h2 className="text-[1.9rem] font-black font-display tracking-tight leading-tight">
+                {isFirstTime ? 'Create admin account' : 'Welcome back'}
+              </h2>
+              <p className={`text-[0.92rem] mt-1 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+                {isFirstTime ? 'Set up the couple dashboard sign-in.' : 'Sign in to the couple dashboard.'}
+              </p>
+            </div>
+            <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              className={`w-full p-4 rounded-xl border-none outline-none font-bold mb-4 ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+            />
+            <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Password</label>
+            <div className="relative mb-2">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+                placeholder="Your password"
+                autoComplete={isFirstTime ? 'new-password' : 'current-password'}
+                className={`w-full p-4 pr-12 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-[#5A6970]"
+              >
+                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              </button>
+            </div>
+            {!isFirstTime && (
+              <button onClick={() => setScreen('forgot')} className="text-[0.85rem] font-bold text-[#0E6B75] mb-2">
+                Forgot password?
+              </button>
+            )}
+            {error && <p className="text-[0.85rem] font-bold text-[#C4453B] my-3">{error}</p>}
+            <button
+              onClick={submit}
+              disabled={busy || !email.trim() || !password}
+              className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-[#0E6B75]/20 disabled:opacity-50 hover:brightness-110 transition-all mt-3"
+            >
+              {busy ? 'Please wait…' : isFirstTime ? 'Create account' : 'Sign in'}
+            </button>
+            <button
+              onClick={() => { setIsFirstTime(!isFirstTime); clearError(); }}
+              className={`w-full py-3 text-[0.85rem] font-bold ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}
+            >
+              {isFirstTime ? 'Already have an account? Sign in' : 'First time? Create an admin account'}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ForceSetPasswordScreen({ isDarkMode, busy, error, newPassword, setNewPassword, confirmPassword, setConfirmPassword, onSubmit, onSignOut }: {
+  isDarkMode: boolean;
+  busy: boolean;
+  error: string;
+  newPassword: string;
+  setNewPassword: (v: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (v: string) => void;
+  onSubmit: () => void;
+  onSignOut: () => void;
+}) {
+  const [show1, setShow1] = useState(false);
+  const [show2, setShow2] = useState(false);
+  const strength = newPassword.length >= 10 ? 'Strong' : newPassword.length >= 6 ? 'Okay' : 'Too short';
+  return (
+    <div className={`fixed inset-0 z-[310] flex items-center justify-center p-5 overflow-y-auto ${isDarkMode ? 'bg-[#0B171C]' : 'bg-[#F6F5FA]'}`}>
+      <div className={`w-full max-w-[430px] my-auto rounded-[28px] p-8 shadow-2xl ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}>
+        <div className="w-16 h-16 rounded-full bg-[#C8932A]/15 text-[#C8932A] flex items-center justify-center mx-auto mb-5">
+          <KeyRound className="w-8 h-8" />
+        </div>
+        <h2 className="text-center text-[1.7rem] font-black font-display tracking-tight mb-2">Set your permanent password</h2>
+        <p className={`text-center text-[0.95rem] leading-relaxed mb-8 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+          You signed in with a temporary password. Choose a permanent one before you continue.
+        </p>
+        <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>New password</label>
+        <div className="relative mb-4">
+          <input
+            type={show1 ? 'text' : 'password'}
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="At least 6 characters"
+            autoComplete="new-password"
+            className={`w-full p-4 pr-12 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+          />
+          <button type="button" onClick={() => setShow1(!show1)} aria-label={show1 ? 'Hide password' : 'Show password'} className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-[#5A6970]">
+            {show1 ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+          </button>
+        </div>
+        <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Confirm new password</label>
+        <div className="relative mb-4">
+          <input
+            type={show2 ? 'text' : 'password'}
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && newPassword && confirmPassword) onSubmit(); }}
+            placeholder="Type it once more"
+            autoComplete="new-password"
+            className={`w-full p-4 pr-12 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+          />
+          <button type="button" onClick={() => setShow2(!show2)} aria-label={show2 ? 'Hide password' : 'Show password'} className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-[#5A6970]">
+            {show2 ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+          </button>
+        </div>
+        {newPassword && (
+          <p className={`text-[0.8rem] font-bold mb-3 ${newPassword.length >= 6 ? 'text-[#0E6B75]' : 'text-[#C4453B]'}`}>
+            Password strength: {strength}
+          </p>
+        )}
+        {error && <p className="text-[0.85rem] font-bold text-[#C4453B] mb-3">{error}</p>}
+        <button
+          onClick={onSubmit}
+          disabled={busy || !newPassword || !confirmPassword}
+          className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-[#0E6B75]/20 disabled:opacity-50 hover:brightness-110 transition-all"
+        >
+          {busy ? 'Saving…' : 'Save password & continue'}
+        </button>
+        <button onClick={onSignOut} className={`w-full py-4 font-bold text-xs uppercase tracking-widest ${isDarkMode ? 'text-white/40' : 'text-[#5A6970]'}`}>
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AdminDashboardModal({ 
   isOpen, 
   onClose, 
@@ -3386,13 +3779,19 @@ function AdminDashboardModal({
   postAds = [],
   reelAds = [],
   onUpdatePostAds,
-  onUpdateReelAds
+  onUpdateReelAds,
+  posts = [],
+  onDeletePost
 }: any) {
   const [newCode, setNewCode] = useState(activeCode ?? '');
   const [isDirty, setIsDirty] = useState(false);
   const [isBulkUploading, setIsBulkUploading] = useState(false);
-  const [activeAdminTab, setActiveAdminTab] = useState('settings');
+  const [activeAdminTab, setActiveAdminTab] = useState('overview');
   const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('vendor');
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteResult, setInviteResult] = useState<{ email: string; tempPassword: string } | null>(null);
 
   // Super Admin Ad Creation & Editing State
   const [adTypeTab, setAdTypeTab] = useState<'post' | 'reel'>('post');
@@ -3415,6 +3814,40 @@ function AdminDashboardModal({
     setAdCtaUrl('');
     setAdMediaUrls([]);
     setAdMediaTypes(type === 'reel' ? ['video'] : []);
+  };
+
+  const daysToWedding = Math.max(0, Math.ceil((new Date(`${WEDDING_DATE}T11:00:00`).getTime() - Date.now()) / 86400000));
+
+  const inviteDashboardAccess = async () => {
+    const email = inviteEmail.trim();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      showToast('Enter a valid email address.', 'error');
+      return;
+    }
+    setInviteBusy(true);
+    try {
+      const currentUser = auth.currentUser;
+      const token = currentUser ? await currentUser.getIdToken() : '';
+      const tempPassword = 'DF' + Math.random().toString(36).slice(2, 10);
+      const res = await fetch('/api/auth-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'invite', email, password: tempPassword, role: inviteRole })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setInviteResult({ email, tempPassword });
+        setInviteEmail('');
+        showToast('Dashboard access created. Share the temporary password now.', 'success');
+      } else {
+        showToast(data.error || 'Could not create the account. Try again.', 'error');
+      }
+    } catch (err) {
+      console.error('Invite error:', err);
+      showToast('Could not reach the invite service.', 'error');
+    } finally {
+      setInviteBusy(false);
+    }
   };
 
   // Sync newCode with live value
@@ -3492,84 +3925,257 @@ function AdminDashboardModal({
             className="fixed inset-0 bg-black/60 z-[110] backdrop-blur-sm"
           />
           <motion.div 
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.9, opacity: 0 }}
-            className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-[500px] z-[111] rounded-[32px] p-0 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 24 }}
+            className={`fixed inset-0 z-[111] p-0 shadow-2xl overflow-hidden flex flex-col ${isDarkMode ? 'bg-[#13232A]' : 'bg-white'}`}
           >
-            {/* Modal Header */}
-            <div className={`p-6 border-b ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <ShieldCheck className="w-8 h-8 text-[#0E6B75]" />
-                  <h3 className="text-2xl font-black font-display tracking-tight">Admin Control</h3>
-                </div>
-                <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5"><X className="w-6 h-6" /></button>
-              </div>
-
-              {/* Tabs */}
-              <div className="flex gap-1 p-1 rounded-2xl bg-black/5">
+            {/* Couple dashboard shell */}
+            <div className="flex flex-1 min-h-0 w-full flex-col md:flex-row">
+              {/* Mobile top nav */}
+              <div className="md:hidden flex items-center gap-2 overflow-x-auto px-4 py-3 bg-[#0B171C] shrink-0">
+                <p className="font-display text-white text-base font-medium mr-1 shrink-0">Dara &amp; Femi</p>
                 {[
-                  { id: 'settings', label: 'Settings', icon: Settings, show: true },
-                  { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper },
-                  { id: 'admins', label: 'Admins', icon: Users, show: isSuper },
-                  { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions?.canDeletePosts }
-                ].filter(t => t.show).map(tab => (
+                  { id: 'overview', label: 'Overview', icon: Home },
+                  { id: 'moderation', label: 'Moderation', icon: ShieldCheck },
+                  { id: 'posts', label: 'Posts', icon: Film },
+                  { id: 'events', label: 'Events', icon: Calendar },
+                  { id: 'hero', label: 'Hero photos', icon: ImageIcon },
+                  { id: 'guests', label: 'Guests', icon: Users },
+                  { id: 'settings', label: 'Settings', icon: Settings },
+                  { id: 'ads', label: 'Ads', icon: Megaphone },
+                  { id: 'admins', label: 'Admins', icon: Users },
+                  { id: 'recycle', label: 'Bin', icon: Trash },
+                ].map((tab) => (
                   <button
                     key={tab.id}
                     onClick={() => setActiveAdminTab(tab.id)}
-                    className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeAdminTab === tab.id ? (isDarkMode ? 'bg-[#0E6B75] text-white shadow-lg' : 'bg-white text-[#0E6B75] shadow-sm') : 'opacity-40 hover:opacity-100'}`}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-[0.7rem] font-black uppercase tracking-widest whitespace-nowrap shrink-0 ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white' : 'bg-white/10 text-white/70'}`}
                   >
-                    <tab.icon className="w-4 h-4 shrink-0" />
+                    <tab.icon className="w-3.5 h-3.5" />
                     <span>{tab.label}</span>
                   </button>
                 ))}
+                <button onClick={onClose} className="ml-auto shrink-0 p-2 rounded-full bg-white/10 text-white" aria-label="Close dashboard"><X className="w-4 h-4" /></button>
               </div>
-            </div>
 
-            {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto p-8 pt-6">
-              {activeAdminTab === 'settings' && (
-                <div className="space-y-8">
-                  {adminPermissions?.canSetAccessCode && (
-                    <div>
-                      <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Active Access Code</label>
-                      <div className="flex gap-2">
-                        <input 
-                          type="text"
-                          value={newCode}
-                          maxLength={20}
-                          onChange={(e) => {
-                            const val = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase();
-                            setNewCode(val);
-                            setIsDirty(true);
-                          }}
-                          className={`flex-1 p-4 rounded-xl border-none outline-none font-black tracking-widest transition-colors ${isDarkMode ? 'bg-[#0B171C] text-[#0E6B75]' : 'bg-[#EEEDF3] text-[#0E6B75]'}`}
-                        />
-                        <button 
-                          onClick={async () => {
-                            await onUpdateCode(newCode);
-                            setIsDirty(false);
-                          }}
-                          disabled={!canSaveCode}
-                          className={`px-6 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${canSaveCode ? 'bg-[#0E6B75] text-white hover:scale-105 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
-                        >
-                          <Save className="w-4 h-4" />
-                          <span className="text-xs font-black uppercase tracking-widest">Save</span>
-                        </button>
+              {/* Sidebar (desktop) */}
+              <aside className="hidden md:flex flex-col w-[250px] shrink-0 bg-[#0B171C] text-white p-5 overflow-y-auto">
+                <div className="mb-6">
+                  <p className="font-display text-[1.25rem] font-medium">Dara &amp; Femi</p>
+                  <p className="text-[0.66rem] uppercase tracking-widest text-white/40 font-black mt-0.5">Couple dashboard</p>
+                </div>
+                <nav className="flex flex-col gap-1">
+                  {[
+                    { id: 'overview', label: 'Overview', icon: Home },
+                    { id: 'moderation', label: 'Moderation', icon: ShieldCheck },
+                    { id: 'posts', label: 'All posts', icon: Film },
+                    { id: 'events', label: 'Events & details', icon: Calendar },
+                    { id: 'hero', label: 'Hero photos', icon: ImageIcon },
+                    { id: 'guests', label: 'Guests & vendors', icon: Users },
+                    { id: 'settings', label: 'Settings', icon: Settings },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveAdminTab(tab.id)}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-left transition-all ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white shadow-lg' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+                    >
+                      <tab.icon className="w-[18px] h-[18px] shrink-0" />
+                      <span>{tab.label}</span>
+                    </button>
+                  ))}
+                </nav>
+                <p className="mt-5 mb-1 px-3 text-[0.62rem] uppercase tracking-widest text-white/30 font-black">More</p>
+                <nav className="flex flex-col gap-1">
+                  {[
+                    { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper },
+                    { id: 'admins', label: 'Admins', icon: Users, show: isSuper },
+                    { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions?.canDeletePosts },
+                  ].filter((t) => t.show).map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveAdminTab(tab.id)}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-left transition-all ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white shadow-lg' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+                    >
+                      <tab.icon className="w-[18px] h-[18px] shrink-0" />
+                      <span>{tab.label}</span>
+                    </button>
+                  ))}
+                </nav>
+                <button onClick={onClose} className="mt-auto pt-4 flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-white/60 hover:bg-white/10 hover:text-white text-left">
+                  <X className="w-[18px] h-[18px] shrink-0" />
+                  <span>Close dashboard</span>
+                </button>
+              </aside>
+
+              {/* Modal Body */}
+              <div className="flex-1 overflow-y-auto p-6 md:p-8 pt-6">
+              {activeAdminTab === 'overview' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">Good day, Dara &amp; Femi</h2>
+                    <p className="text-sm opacity-60 mt-0.5">{daysToWedding} days to the wedding. Here is what needs you.</p>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {(() => {
+                      const totalLikes = posts.reduce((s: number, p: any) => s + (p.likeCount || 0) + (p.loveCount || 0), 0);
+                      const videoCount = posts.filter((p: any) => (p.mediaTypes || []).some((t: string) => t === 'video') || (p.mediaUrls || []).some((u: string) => /\.(mp4|webm|mov)$/i.test(u))).length;
+                      const authors = new Set(posts.map((p: any) => (p.authorName || '').trim()).filter(Boolean));
+                      const stats: [string, number, string][] = [
+                        ['Posts', posts.length, 'shared so far'],
+                        ['Videos & reels', videoCount, 'in the feed'],
+                        ['Reactions', totalLikes, 'likes and loves'],
+                        ['Guests', authors.size, 'have posted'],
+                      ];
+                      return stats.map(([label, value, sub]) => (
+                        <div key={label} className={`rounded-[20px] p-4 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                          <b className="block text-2xl font-black font-display">{value}</b>
+                          <span className="block text-[0.68rem] font-black uppercase tracking-widest opacity-60 mt-1">{label}</span>
+                          <small className="block text-[0.7rem] opacity-50 mt-0.5">{sub}</small>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Needs your attention</h3>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div><b>{posts.length}</b> {posts.length === 1 ? 'memory' : 'memories'} in the feed</div>
+                        <button onClick={() => setActiveAdminTab('moderation')} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest">Review</button>
                       </div>
-                      <div className="mt-2 px-1">
-                        {!isCodeValid && newCode.length > 0 && (
-                          <p className="text-[0.65rem] text-red-500 font-bold uppercase tracking-tight">Code must be at least 4 characters</p>
-                        )}
-                        {isCodeValid && !isCodeChanged && isDirty && (
-                          <p className="text-[0.65rem] text-[#0E6B75] font-bold uppercase tracking-tight">Current code is already {normalizedActiveCode}</p>
-                        )}
+                      <div className="flex items-center justify-between gap-3">
+                        <div><b>0</b> reported items</div>
+                        <span className="px-4 py-2 rounded-full text-[0.7rem] font-black uppercase tracking-widest opacity-40">All clear</span>
                       </div>
                     </div>
-                  )}
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Posts in the last 14 days</h3>
+                    <div className="flex items-end gap-1 h-28">
+                      {(() => {
+                        const buckets = new Array(14).fill(0);
+                        const today = new Date(); today.setHours(0, 0, 0, 0);
+                        posts.forEach((p: any) => {
+                          const t = p.timestamp?.toDate ? p.timestamp.toDate() : (p.createdAt?.toDate ? p.createdAt.toDate() : null);
+                          if (!t) return;
+                          const d = new Date(t); d.setHours(0, 0, 0, 0);
+                          const diff = Math.floor((today.getTime() - d.getTime()) / 86400000);
+                          if (diff >= 0 && diff < 14) buckets[13 - diff]++;
+                        });
+                        const max = Math.max(1, ...buckets);
+                        return buckets.map((v, i) => (
+                          <div key={i} className="flex-1 bg-[#0E6B75]/25 rounded-t-md" style={{ height: `${Math.max(4, (v / max) * 100)}%` }} title={`${v} ${v === 1 ? 'post' : 'posts'}`} />
+                        ));
+                      })()}
+                    </div>
+                    <small className="block mt-2 opacity-50">Activity picks up as the wedding gets closer.</small>
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Latest activity</h3>
+                    <div className="space-y-3">
+                      {posts.slice(0, 4).map((p: any) => (
+                        <div key={p.id} className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                          <div className="min-w-0">
+                            <p className="font-bold text-[0.92rem] truncate">{p.authorName || 'A guest'} shared a memory</p>
+                            <small className="block opacity-50 truncate">{p.text || p.caption || ''}</small>
+                          </div>
+                        </div>
+                      ))}
+                      {posts.length === 0 && <p className="opacity-50 text-sm">No memories yet. Guest posts will show up here the moment they land.</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
 
-                  {adminPermissions?.canUploadImages && (
+              {activeAdminTab === 'moderation' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">Moderation</h2>
+                    <p className="text-sm opacity-60 mt-0.5">Guest posts appear in the feed the moment they are shared. Remove anything that should not be there.</p>
+                  </div>
+                  <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                    {posts.slice(0, 12).map((p: any) => (
+                      <div key={p.id} className="flex items-center gap-3 p-4">
+                        <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-[0.92rem] truncate">{p.authorName || 'A guest'}</p>
+                          <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'}</small>
+                        </div>
+                        {adminPermissions?.canDeletePosts && (
+                          <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest shrink-0">Remove</button>
+                        )}
+                      </div>
+                    ))}
+                    {posts.length === 0 && <p className="p-5 opacity-50 text-sm">Nothing to moderate yet.</p>}
+                  </div>
+                </div>
+              )}
+
+              {activeAdminTab === 'posts' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">All posts</h2>
+                    <p className="text-sm opacity-60 mt-0.5">{posts.length} {posts.length === 1 ? 'memory' : 'memories'} shared by your people.</p>
+                  </div>
+                  <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                    {posts.map((p: any) => (
+                      <div key={p.id} className="p-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-bold text-[0.92rem] truncate">{p.authorName || 'A guest'}</p>
+                            <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'} · ♥ {(p.likeCount || 0) + (p.loveCount || 0)}</small>
+                          </div>
+                          {adminPermissions?.canDeletePosts && (
+                            <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest shrink-0">Remove</button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {posts.length === 0 && <p className="p-5 opacity-50 text-sm">No posts match. Memories your guests share will show up here.</p>}
+                  </div>
+                </div>
+              )}
+
+              {activeAdminTab === 'events' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">Events &amp; details</h2>
+                    <p className="text-sm opacity-60 mt-0.5">The journey your guests see on the Home timeline.</p>
+                  </div>
+                  <div className="space-y-3">
+                    {EVENTS_DATA.map((e, i) => {
+                      const st = JOURNEY_STATES[i];
+                      const label = st === 'done' ? 'Done' : st === 'next' ? 'Next up' : 'Upcoming';
+                      return (
+                        <div key={e.id} className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                              <b className="font-display text-lg">{e.name}</b>
+                              <small className="block opacity-50">{e.type}</small>
+                            </div>
+                            <span className={`px-3 py-1.5 rounded-full text-[0.65rem] font-black uppercase tracking-widest ${st === 'done' ? 'bg-[#0E6B75]/15 text-[#0E6B75]' : st === 'next' ? 'bg-[#C8932A]/20 text-[#C8932A]' : 'opacity-40 bg-black/5'}`}>
+                              {label}
+                            </span>
+                          </div>
+                          <p className="text-sm opacity-70 mt-2">{new Date(`${e.date}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}{e.time ? ` · ${e.time}` : ''} · {e.desc}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-sm opacity-50">Event editing arrives with the next update. The countdown and statuses on the Home screen follow these dates.</p>
+                </div>
+              )}
+
+              {activeAdminTab === 'hero' && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">Hero photos</h2>
+                    <p className="text-sm opacity-60 mt-0.5">Photos that float across the top of the Home screen, and the giant footer grid.</p>
+                  </div>
+                  <div className="space-y-6">
+{                  {adminPermissions?.canUploadImages && (
                     <div>
                       <div className="flex items-center justify-between mb-3">
                         <label className="block text-[0.7rem] uppercase tracking-widest font-black opacity-50">
@@ -3740,7 +4346,138 @@ function AdminDashboardModal({
                       </div>
                       <p className="text-[0.75rem] opacity-60 italic">Upload up to 24 images for the giant footer photo grid (tapping a tile opens it full-screen).</p>
                     </div>
+                  )}}
+                  </div>
+                </div>
+              )}
+
+              {activeAdminTab === 'guests' && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">Guests &amp; vendors</h2>
+                    <p className="text-sm opacity-60 mt-0.5">People join without an account. This list shows everyone who has posted.</p>
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-2">Invite dashboard access</h3>
+                    <p className="text-sm opacity-60 mb-4">Creates an account with a temporary password. The person must set a permanent password the first time they sign in.</p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="email"
+                        value={inviteEmail}
+                        onChange={(e) => setInviteEmail(e.target.value)}
+                        placeholder="name@email.com"
+                        className={`flex-1 p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+                      />
+                      <select
+                        value={inviteRole}
+                        onChange={(e) => setInviteRole(e.target.value)}
+                        className={`p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
+                      >
+                        <option value="vendor">Vendor</option>
+                        <option value="guest">Guest</option>
+                      </select>
+                      <button onClick={inviteDashboardAccess} disabled={inviteBusy} className="px-6 py-4 rounded-xl bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest disabled:opacity-50">
+                        {inviteBusy ? 'Creating…' : 'Create access'}
+                      </button>
+                    </div>
+                    {inviteResult && (
+                      <div className="mt-4 p-4 rounded-xl bg-[#C8932A]/10 border border-[#C8932A]/30">
+                        <p className="text-sm font-bold">Share this temporary password now. It shows only once.</p>
+                        <div className="flex items-center gap-3 mt-2 flex-wrap">
+                          <code className="px-3 py-2 rounded-lg bg-black/10 font-black tracking-widest">{inviteResult.tempPassword}</code>
+                          <span className="text-sm opacity-70">for {inviteResult.email}</span>
+                          <button
+                            onClick={() => { navigator.clipboard?.writeText(inviteResult.tempPassword); showToast('Temporary password copied'); }}
+                            className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">People who have posted</h3>
+                    <div className="space-y-3">
+                      {(() => {
+                        const counts: Record<string, number> = {};
+                        posts.forEach((p: any) => {
+                          const name = (p.authorName || '').trim();
+                          if (name) counts[name] = (counts[name] || 0) + 1;
+                        });
+                        const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+                        if (rows.length === 0) return <p className="opacity-50 text-sm">No posts yet, so nobody has shown up here.</p>;
+                        return rows.map(([name, count]) => (
+                          <div key={name} className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black text-sm">{name.charAt(0).toUpperCase()}</div>
+                              <b className="text-[0.95rem]">{name}</b>
+                            </div>
+                            <span className="opacity-60 text-sm font-bold">{count} {count === 1 ? 'post' : 'posts'}</span>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Our vendors</h3>
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div className={`rounded-2xl p-4 border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
+                        <b>Lens &amp; Light Studio</b>
+                        <span className="block text-sm opacity-50">Photographer</span>
+                      </div>
+                      <div className={`rounded-2xl p-4 border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
+                        <b>Kiln Films</b>
+                        <span className="block text-sm opacity-50">Videographer</span>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-sm opacity-50">The guest access code lives under Settings, further down.</p>
+                </div>
+              )}
+
+              {activeAdminTab === 'settings' && (
+                <div className="space-y-8">
+                  {adminPermissions?.canSetAccessCode && (
+                    <div>
+                      <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Active Access Code</label>
+                      <div className="flex gap-2">
+                        <input 
+                          type="text"
+                          value={newCode}
+                          maxLength={20}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase();
+                            setNewCode(val);
+                            setIsDirty(true);
+                          }}
+                          className={`flex-1 p-4 rounded-xl border-none outline-none font-black tracking-widest transition-colors ${isDarkMode ? 'bg-[#0B171C] text-[#0E6B75]' : 'bg-[#EEEDF3] text-[#0E6B75]'}`}
+                        />
+                        <button 
+                          onClick={async () => {
+                            await onUpdateCode(newCode);
+                            setIsDirty(false);
+                          }}
+                          disabled={!canSaveCode}
+                          className={`px-6 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${canSaveCode ? 'bg-[#0E6B75] text-white hover:scale-105 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
+                        >
+                          <Save className="w-4 h-4" />
+                          <span className="text-xs font-black uppercase tracking-widest">Save</span>
+                        </button>
+                      </div>
+                      <div className="mt-2 px-1">
+                        {!isCodeValid && newCode.length > 0 && (
+                          <p className="text-[0.65rem] text-red-500 font-bold uppercase tracking-tight">Code must be at least 4 characters</p>
+                        )}
+                        {isCodeValid && !isCodeChanged && isDirty && (
+                          <p className="text-[0.65rem] text-[#0E6B75] font-bold uppercase tracking-tight">Current code is already {normalizedActiveCode}</p>
+                        )}
+                      </div>
+                    </div>
                   )}
+
+
+                  <p className="text-sm opacity-50">Hero and footer images now live under "Hero photos" in the sidebar.</p>
 
                   {isSuper && (
                     <div className="space-y-6 pt-4 border-t border-black/5 dark:border-white/5">
@@ -4183,6 +4920,9 @@ function AdminDashboardModal({
               )}
             </div>
 
+            </div>
+            </div>
+
             {/* Modal Footer */}
             <div className={`p-6 border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
               <div className="flex gap-4">
@@ -4216,16 +4956,16 @@ interface FloatingPhotoCardProps {
   left: string;
   width: string;
   initialRotate: number;
-  pairIndex: number;
-  totalPairs: number;
-  isRightLane: boolean;
+  groupIndex: number;
+  totalGroups: number;
+  staggerPx: number;
   caption?: string;
   constraintsRef: React.RefObject<HTMLDivElement | null>;
 }
 
-const PAIR_TRAVERSE_SECONDS = 9; // Time for one pair of images to traverse the hero banner
+const GROUP_TRAVERSE_SECONDS = 11; // Time for one group of four images to traverse the hero banner
 
-const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width, initialRotate, pairIndex, totalPairs, isRightLane, caption, constraintsRef }) => {
+const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width, initialRotate, groupIndex, totalGroups, staggerPx, caption, constraintsRef }) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
   const y = useMotionValue(1000);
@@ -4248,18 +4988,17 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
     const containerHeight = constraintsRef.current.offsetHeight;
     const cardHeight = cardRef.current.offsetHeight || 220;
     const margin = 60;
-    // Sequential pairs: the next pair of 2 only enters once the current pair has
+    // Sequential groups: the next group of 4 only enters once the current group has
     // fully cleared the top of the hero banner.
-    const pairSpacing = containerHeight + cardHeight + margin;
-    const totalCycleLength = Math.max(containerHeight + cardHeight + margin, pairSpacing * Math.max(1, totalPairs));
+    const groupSpacing = containerHeight + cardHeight + margin;
+    const totalCycleLength = Math.max(containerHeight + cardHeight + margin, groupSpacing * Math.max(1, totalGroups));
 
     if (containerHeight === 0) return;
 
     if (!initialized.current) {
-      pxPerSecond.current = (containerHeight + cardHeight) / PAIR_TRAVERSE_SECONDS;
-      // Start pair 0 inside the lower half of the viewport while subsequent pairs follow at pairSpacing intervals
-      const laneStagger = isRightLane ? 30 : 0;
-      const startPos = (containerHeight * 0.65) + (pairIndex * pairSpacing) + laneStagger;
+      pxPerSecond.current = (containerHeight + cardHeight) / GROUP_TRAVERSE_SECONDS;
+      // Start group 0 inside the lower half of the viewport while subsequent groups follow at groupSpacing intervals
+      const startPos = (containerHeight * 0.65) + (groupIndex * groupSpacing) + staggerPx;
       y.set(startPos);
       initialized.current = true;
     }
@@ -4337,34 +5076,31 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
 function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, images: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // 14 slot configurations paired into Left + Right lanes so 2 images scroll together at a time
-  const pairLaneConfigs = [
-    // Pair 1
-    { left: "6%", width: "clamp(135px, 38vw, 200px)", rotate: -6 },
-    { left: "54%", width: "clamp(135px, 38vw, 200px)", rotate: 5 },
-    // Pair 2
-    { left: "8%", width: "clamp(135px, 38vw, 200px)", rotate: 4 },
-    { left: "52%", width: "clamp(135px, 38vw, 200px)", rotate: -5 },
-    // Pair 3
-    { left: "5%", width: "clamp(135px, 38vw, 200px)", rotate: -4 },
-    { left: "55%", width: "clamp(135px, 38vw, 200px)", rotate: 6 },
-    // Pair 4
-    { left: "9%", width: "clamp(135px, 38vw, 200px)", rotate: 5 },
-    { left: "53%", width: "clamp(135px, 38vw, 200px)", rotate: -4 },
-    // Pair 5
-    { left: "7%", width: "clamp(135px, 38vw, 200px)", rotate: -5 },
-    { left: "54%", width: "clamp(135px, 38vw, 200px)", rotate: 4 },
-    // Pair 6
-    { left: "6%", width: "clamp(135px, 38vw, 200px)", rotate: 6 },
-    { left: "52%", width: "clamp(135px, 38vw, 200px)", rotate: -6 },
-    // Pair 7
-    { left: "8%", width: "clamp(135px, 38vw, 200px)", rotate: -4 },
-    { left: "54%", width: "clamp(135px, 38vw, 200px)", rotate: 5 },
+  // 14 slot configurations grouped into fours so 4 images scroll together at a time
+  const laneConfigs = [
+    // Group 1
+    { left: "2%", width: "clamp(88px, 21vw, 160px)", rotate: -6 },
+    { left: "27%", width: "clamp(88px, 21vw, 160px)", rotate: 4 },
+    { left: "52%", width: "clamp(88px, 21vw, 160px)", rotate: -4 },
+    { left: "77%", width: "clamp(88px, 21vw, 160px)", rotate: 6 },
+    // Group 2
+    { left: "4%", width: "clamp(88px, 21vw, 160px)", rotate: 5 },
+    { left: "29%", width: "clamp(88px, 21vw, 160px)", rotate: -5 },
+    { left: "54%", width: "clamp(88px, 21vw, 160px)", rotate: 4 },
+    { left: "79%", width: "clamp(88px, 21vw, 160px)", rotate: -6 },
+    // Group 3
+    { left: "3%", width: "clamp(88px, 21vw, 160px)", rotate: -4 },
+    { left: "28%", width: "clamp(88px, 21vw, 160px)", rotate: 6 },
+    { left: "53%", width: "clamp(88px, 21vw, 160px)", rotate: -5 },
+    { left: "78%", width: "clamp(88px, 21vw, 160px)", rotate: 5 },
+    // Group 4 (slots 13-14)
+    { left: "5%", width: "clamp(88px, 21vw, 160px)", rotate: 4 },
+    { left: "30%", width: "clamp(88px, 21vw, 160px)", rotate: -4 },
   ];
 
   const baseImages = images.length > 0 ? images : PLACEHOLDER_IMAGES;
   const cappedImages = Array.from({ length: 14 }, (_, i) => baseImages[i % baseImages.length]);
-  const totalPairs = Math.max(1, Math.ceil(cappedImages.length / 2));
+  const totalGroups = Math.max(1, Math.ceil(cappedImages.length / 4));
 
   return (
     <section 
@@ -4377,9 +5113,8 @@ function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, imag
       
       <div className="absolute inset-0 overflow-hidden">
         {cappedImages.map((src, i) => {
-          const config = pairLaneConfigs[i % pairLaneConfigs.length];
-          const pairIndex = Math.floor(i / 2);
-          const isRightLane = i % 2 === 1;
+          const config = laneConfigs[i % laneConfigs.length];
+          const groupIndex = Math.floor(i / 4);
           return (
             <FloatingPhotoCard 
               key={`${cappedImages.length}-${i}-${src}`} 
@@ -4387,9 +5122,9 @@ function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, imag
               left={config.left} 
               width={config.width} 
               initialRotate={config.rotate} 
-              pairIndex={pairIndex}
-              totalPairs={totalPairs}
-              isRightLane={isRightLane}
+              groupIndex={groupIndex}
+              totalGroups={totalGroups}
+              staggerPx={(i % 4) * 34}
               caption={EVENTS_DATA[i % EVENTS_DATA.length].name}
               constraintsRef={containerRef}
             />
