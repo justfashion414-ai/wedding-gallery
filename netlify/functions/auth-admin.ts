@@ -143,7 +143,7 @@ async function publishRules(): Promise<{ rulesetName: string; releaseName: strin
   const patchRelease = () => fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=release.rulesetName`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ release: { rulesetName } })
+    body: JSON.stringify({ release: { name: `projects/${PROJECT_ID}/releases/cloud.firestore`, rulesetName } })
   });
   let relRes = await patchRelease();
   const released = await relRes.json().catch(() => ({}));
