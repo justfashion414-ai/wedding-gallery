@@ -2220,7 +2220,7 @@ function WhatsAppIcon({ className = "w-7 h-7" }: { className?: string }) {
 
 function ShareSheet({ post, isDarkMode, onClose, showToast }: any) {
   const shareUrl = `${window.location.origin}${window.location.pathname}?post=${post.id || post.uid}`;
-  const title = post.text || 'Check out this memory from Dara & Femi's wedding!';
+  const title = post.text || "Check out this memory from Dara & Femi's wedding!";
 
   const shareOptions = [
     { 
