@@ -184,13 +184,19 @@ async function publishRules(): Promise<{ rulesetName: string; releaseName: strin
 
 async function addAuthorizedDomain(domain: string): Promise<{ ok: boolean; detail: string }> {
   const token = await getAccessToken();
-  const res = await fetch(`https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/authorizedDomains`, {
-    method: 'POST',
+  const cfgUrl = `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT_ID}/config`;
+  const getRes = await fetch(cfgUrl, { headers: { Authorization: `Bearer ${token}` } });
+  const current = await getRes.json().catch(() => ({}));
+  if (!getRes.ok) return { ok: false, detail: `config read failed: ${getRes.status} ${JSON.stringify(current).slice(0, 300)}` };
+  const domains: string[] = Array.isArray(current.authorizedDomains) ? current.authorizedDomains : [];
+  if (domains.includes(domain)) return { ok: true, detail: 'already authorized' };
+  const patchRes = await fetch(`${cfgUrl}?updateMask=authorizedDomains`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ domain })
+    body: JSON.stringify({ authorizedDomains: [...domains, domain] })
   });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, detail: res.ok ? 'added' : `${res.status} ${JSON.stringify(data).slice(0, 400)}` };
+  const patched = await patchRes.json().catch(() => ({}));
+  return { ok: patchRes.ok, detail: patchRes.ok ? 'added' : `update failed: ${patchRes.status} ${JSON.stringify(patched).slice(0, 300)}` };
 }
 
 const json = (statusCode: number, body: any) => ({
