@@ -4178,7 +4178,7 @@ function AdminDashboardModal({
                     <p className="text-sm opacity-60 mt-0.5">Photos that float across the top of the Home screen, and the giant footer grid.</p>
                   </div>
                   <div className="space-y-6">
-{                  {adminPermissions?.canUploadImages && (
+                  {adminPermissions?.canUploadImages && (
                     <div>
                       <div className="flex items-center justify-between mb-3">
                         <label className="block text-[0.7rem] uppercase tracking-widest font-black opacity-50">
