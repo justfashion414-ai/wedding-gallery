@@ -1546,8 +1546,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               exit={{ opacity: 0 }}
               className="space-y-0 pt-3"
             >
-              {/* Segmented Control: Post vs Reels (shown here on Post tab; inside ReelsFeed scroll container on Reels tab so it scrolls up out of view) */}
-              {feedSubTab !== 'reels' && (
+              {/* Segmented Control: Post vs Reels (pinned at the top of the Feed on both tabs so users can always switch back) */}
+              {(
                 <div className={`flex items-center p-1.5 rounded-2xl mb-4 border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                   <button
                     onClick={() => setFeedSubTab('post')}
@@ -2329,7 +2329,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         />
       )}
 
-      {/* Bottom Nav - DYNAMIC FEED/SEND BUTTON */}
+      {/* Bottom Nav - DYNAMIC FEED/SEND BUTTON (hidden while viewing full-portrait Reels) */}
+      {!(activeTab === 'feed' && feedSubTab === 'reels') && (
       <nav className={`fixed left-1/2 bottom-0 -translate-x-1/2 w-full max-w-[520px] z-[90] grid grid-cols-3 items-end p-[8px_12px_calc(8px+env(safe-area-inset-bottom,0px))] border-t transition-colors ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
         <button 
           onClick={() => setActiveTab('home')}
@@ -2375,6 +2376,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           <span>Settings</span>
         </button>
       </nav>
+      )}
 
       {/* iOS / Add to Home Screen Bottom Splash Pop Up (2 Steps - iOS only) */}
       <AnimatePresence>
@@ -3028,20 +3030,16 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
   const [activeIndex, setActiveIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const toggleRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll past the Post/Reels toggle bar onto the first reel when Reels opens,
-  // or allow the user to scroll back to the very top to tap Post/Reels while keeping
-  // each reel strictly snap-locked so the next video is only seen when swiping up.
+  // Snap-locked reels: the next video is only seen when swiping up.
+  // The Post/Reels toggle is pinned above this container, outside the scroll.
   const handleScroll = () => {
     if (!containerRef.current) return;
     const { scrollTop, clientHeight } = containerRef.current;
-    const toggleHeight = toggleRef.current ? toggleRef.current.offsetHeight : 0;
     if (clientHeight > 0) {
-      const adjustedScroll = Math.max(0, scrollTop - toggleHeight);
       const idx = Math.min(
         Math.max(0, reels.length - 1),
-        Math.round(adjustedScroll / clientHeight)
+        Math.round(scrollTop / clientHeight)
       );
       if (idx !== activeIndex) {
         setActiveIndex(idx);
@@ -3052,23 +3050,6 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
   if (!reels || reels.length === 0) {
     return (
       <div>
-        <div className={`flex items-center p-1.5 rounded-2xl mb-4 border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-          <button
-            onClick={onSwitchToPost}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap ${
-              isDarkMode ? 'text-[#93A4AB] hover:text-white' : 'text-[#5A6970] hover:text-[#14262D]'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>Post</span>
-          </button>
-          <button
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap bg-[#0E6B75] text-white shadow-md"
-          >
-            <Film className="w-4 h-4" />
-            <span>Reels</span>
-          </button>
-        </div>
         <div className="py-24 text-center opacity-30 border-t border-[#DAD8E3] dark:border-[#22363E]">
           <Film className="w-12 h-12 mx-auto mb-4" />
           <p className="font-black uppercase tracking-widest text-xs">No portrait reels yet</p>
@@ -3082,34 +3063,8 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="h-[calc(100dvh-96px)] min-h-[500px] w-full overflow-y-scroll snap-y snap-mandatory no-scrollbar relative rounded-[28px]"
+      className="h-[calc(100dvh-150px)] min-h-[420px] w-full overflow-y-scroll snap-y snap-mandatory no-scrollbar relative rounded-[28px]"
     >
-      {/* Post / Reels Toggle Switch inside the scroll container so it scrolls up out of view when viewing reels */}
-      <div ref={toggleRef} className="snap-start pb-3">
-        <div className={`flex items-center p-1.5 rounded-2xl border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-          <button
-            onClick={onSwitchToPost}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap ${
-              isDarkMode ? 'text-[#93A4AB] hover:text-white' : 'text-[#5A6970] hover:text-[#14262D]'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>Post</span>
-          </button>
-          <button
-            onClick={() => {
-              if (containerRef.current && toggleRef.current) {
-                containerRef.current.scrollTo({ top: toggleRef.current.offsetHeight, behavior: 'smooth' });
-              }
-            }}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap bg-[#0E6B75] text-white shadow-md"
-          >
-            <Film className="w-4 h-4" />
-            <span>Reels</span>
-          </button>
-        </div>
-      </div>
-
       {reels.map((reel: any, idx: number) => (
         <ReelCard
           key={reel.id}
