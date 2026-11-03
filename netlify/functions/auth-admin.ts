@@ -140,7 +140,7 @@ async function publishRules(): Promise<{ rulesetName: string; releaseName: strin
   const created = await createRes.json().catch(() => ({}));
   if (!createRes.ok) throw new Error(`ruleset create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 400)}`);
   const rulesetName = created.name;
-  const relRes = await fetch(`https://firebase.googleapis.com/v1alpha/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=rulesetName`, {
+  const relRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=rulesetName`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ rulesetName })
