@@ -3405,7 +3405,7 @@ function SamplePostCard({ post, isDarkMode }: { post: any; isDarkMode: boolean }
               <Play className="w-7 h-7 text-white ml-0.5" />
             </div>
           ) : (
-            <span className="text-white/70 text-3xl">\u2698</span>
+            <span className="text-white/70 text-3xl">⚘</span>
           )}
           {isMotion && (
             <span className="absolute bottom-3 right-3 px-2 py-0.5 rounded-full bg-black/40 text-white text-[0.62rem] font-black uppercase tracking-widest">Reel</span>
