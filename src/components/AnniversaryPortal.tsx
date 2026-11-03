@@ -1596,7 +1596,14 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                         u.includes('/video/')
                       );
                       const orientation = p.videoOrientation || videoOrientations[p.id];
-                      const isPortraitReel = hasVideo && media.length === 1 && orientation === 'portrait';
+                      const hasImage = media.some((u, idx) =>
+                        !(p.mediaTypes?.[idx] === 'video' ||
+                          u.toLowerCase().includes('.mp4') ||
+                          u.toLowerCase().includes('.webm') ||
+                          u.toLowerCase().includes('.mov') ||
+                          u.includes('/video/'))
+                      );
+                      const isPortraitReel = hasVideo && orientation === 'portrait' && !hasImage;
                       return !isPortraitReel;
                     });
 
@@ -1604,7 +1611,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                       return (
                         <>
                           <p className={`py-6 text-center text-[0.7rem] font-black uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample memories · real guest posts appear here</p>
-                          {SAMPLE_POSTS.map((sp) => (
+                          {SAMPLE_POSTS.filter((sp) => sp.mediaType !== 'reel' && sp.mediaType !== 'video').map((sp) => (
                             <SamplePostCard key={sp.id} post={sp} isDarkMode={isDarkMode} />
                           ))}
                         </>
@@ -1713,7 +1720,14 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                         u.includes('/video/')
                       );
                       const orientation = p.videoOrientation || videoOrientations[p.id];
-                      return hasVideo && orientation === 'portrait';
+                      const hasImage = media.some((u, idx) =>
+                        !(p.mediaTypes?.[idx] === 'video' ||
+                          u.toLowerCase().includes('.mp4') ||
+                          u.toLowerCase().includes('.webm') ||
+                          u.toLowerCase().includes('.mov') ||
+                          u.includes('/video/'))
+                      );
+                      return hasVideo && orientation === 'portrait' && !hasImage;
                     });
 
                     const activeReelAds = shuffledReelAds.length > 0 ? shuffledReelAds : reelAds;
