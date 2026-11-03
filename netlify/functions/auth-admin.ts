@@ -140,28 +140,42 @@ async function publishRules(): Promise<{ rulesetName: string; releaseName: strin
   const created = await createRes.json().catch(() => ({}));
   if (!createRes.ok) throw new Error(`ruleset create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 400)}`);
   const rulesetName = created.name;
-  const patchRelease = () => fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=release.rulesetName`, {
+  const releasePath = `projects/${PROJECT_ID}/releases/cloud.firestore`;
+  const variants: Array<{ mask: string; body: any }> = [
+    { mask: 'ruleset_name', body: { release: { name: releasePath, rulesetName } } },
+    { mask: 'ruleset_name', body: { name: releasePath, rulesetName } },
+    { mask: 'release.rulesetName', body: { release: { name: releasePath, rulesetName } } }
+  ];
+  const patchRelease = (variant: { mask: string; body: any }) => fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=${variant.mask}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ release: { name: `projects/${PROJECT_ID}/releases/cloud.firestore`, rulesetName } })
+    body: JSON.stringify(variant.body)
   });
-  let relRes = await patchRelease();
-  const released = await relRes.json().catch(() => ({}));
-  let releaseName = released.name as string | undefined;
+  let relRes = await patchRelease(variants[0]);
+  let lastDetail = '';
+  for (const variant of variants) {
+    relRes = await patchRelease(variant);
+    const errJson = await relRes.clone().json().catch(() => ({}));
+    if (relRes.ok) break;
+    lastDetail = JSON.stringify(errJson).slice(0, 400);
+    // A 404 here means the release does not exist yet; create it below.
+    if (relRes.status !== 400) break;
+  }
+  let releaseName: string | undefined;
   if (!relRes.ok) {
     // A project that has never published rules has no release yet; create it.
     const createRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name: `projects/${PROJECT_ID}/releases/cloud.firestore`, rulesetName })
+      body: JSON.stringify({ name: releasePath, rulesetName })
     });
     const created = await createRes.json().catch(() => ({}));
     if (createRes.ok) {
       releaseName = created.name;
     } else {
-      relRes = await patchRelease();
+      relRes = await patchRelease(variants[0]);
       const retried = await relRes.json().catch(() => ({}));
-      if (!relRes.ok) throw new Error(`release update failed: ${relRes.status} ${JSON.stringify(retried).slice(0, 400)}`);
+      if (!relRes.ok) throw new Error(`release update failed: ${relRes.status} ${JSON.stringify(retried).slice(0, 400)}; create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 200)}`);
       releaseName = retried.name;
     }
   }
