@@ -62,8 +62,11 @@ import {
   LogOut, 
   ShieldCheck, 
   RefreshCw,
-  Save
-Eye, EyeOff, KeyRound, MessageCircle,
+  Save,
+  Eye,
+  EyeOff,
+  KeyRound,
+  MessageCircle,
 } from 'lucide-react';
 
 enum OperationType {
