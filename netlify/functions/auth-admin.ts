@@ -159,9 +159,9 @@ export const handler = async (event: any) => {
       if (lookup.ok && lookup.data.users && lookup.data.users.length > 0) {
         return json(409, { error: 'That account already exists. Sign in instead.' });
       }
-      const created = await identityRequest('', { email, password, emailVerified: true });
+      const created = await identityRequest('/accounts:signUp', { email, password });
       if (!created.ok) {
-        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || 'Could not create the account' });
+        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || 'Could not create the account' + (created.data ? ` (${JSON.stringify(created.data).slice(0, 200)})` : '') });
       }
       await setAdminDoc(email, 'admin');
       return json(200, { ok: true, localId: created.data.localId });
@@ -186,9 +186,9 @@ export const handler = async (event: any) => {
       if (lookup.ok && lookup.data.users && lookup.data.users.length > 0) {
         return json(409, { error: 'That email already has an account' });
       }
-      const created = await identityRequest('', { email, password, emailVerified: true });
+      const created = await identityRequest('/accounts:signUp', { email, password });
       if (!created.ok) {
-        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || 'Could not create the account' });
+        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || 'Could not create the account' + (created.data ? ` (${JSON.stringify(created.data).slice(0, 200)})` : '') });
       }
       await setAdminDoc(email, body.role === 'guest' ? 'guest' : 'vendor');
       return json(200, { ok: true, localId: created.data.localId });
