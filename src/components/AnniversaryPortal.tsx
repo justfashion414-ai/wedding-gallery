@@ -331,6 +331,15 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [fontSize, setFontSize] = useState<'m' | 'l' | 'xl'>('m');
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [footerImages, setFooterImages] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('ann-footer-images');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [footerLightbox, setFooterLightbox] = useState<string | null>(null);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [newPostText, setNewPostText] = useState('');
   const [accessCode, setAccessCode] = useState('');
@@ -718,6 +727,14 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           setHeroImages(data.heroImages);
           try {
             localStorage.setItem('ann-hero-images', JSON.stringify(data.heroImages));
+          } catch {
+            // Ignore storage quota error
+          }
+        }
+        if (Array.isArray(data.footerImages)) {
+          setFooterImages(data.footerImages);
+          try {
+            localStorage.setItem('ann-footer-images', JSON.stringify(data.footerImages));
           } catch {
             // Ignore storage quota error
           }
@@ -1375,8 +1392,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
               {/* GIANT FOOTER WITH INTERACTIVE PHOTO GRID (placeholders until photos arrive) */}
               <section className="relative overflow-hidden w-screen left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-[700px] sm:min-h-[850px] flex items-center justify-center bg-[#EEEDF3] dark:bg-[#0B171C] mt-12">
-                <div className="absolute inset-0 z-0 grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 auto-rows-fr opacity-60">
-                  <GridScanner isDarkMode={isDarkMode} />
+                <div className="absolute inset-0 z-0 grid grid-cols-10 auto-rows-fr opacity-60">
+                  <GridScanner isDarkMode={isDarkMode} images={footerImages} onTap={(src: string) => setFooterLightbox(src)} />
                 </div>
 
                 <motion.div
@@ -1497,11 +1514,12 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
                     if (regularPosts.length === 0) {
                       return (
-                        <div className="py-24 text-center opacity-30">
-                          <MessageSquare className="w-12 h-12 mx-auto mb-4" />
-                          <p className="font-black uppercase tracking-widest text-xs">No posts shared yet</p>
-                          <p className="text-[0.75rem] mt-2">Tap the center button to share text, photos, or landscape videos!</p>
-                        </div>
+                        <>
+                          <p className={`py-6 text-center text-[0.7rem] font-black uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample memories · real guest posts appear here</p>
+                          {SAMPLE_POSTS.map((sp) => (
+                            <SamplePostCard key={sp.id} post={sp} isDarkMode={isDarkMode} />
+                          ))}
+                        </>
                       );
                     }
 
@@ -1558,6 +1576,31 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
                     return feedElements;
                   })()}
+                </div>
+              ) : !posts.some((p) => {
+                  const media: string[] = p.mediaUrls || (p.mediaUrl ? [p.mediaUrl] : []);
+                  const hasVideo = media.some((u: string, idx: number) =>
+                    p.mediaTypes?.[idx] === 'video' ||
+                    u.toLowerCase().includes('.mp4') ||
+                    u.toLowerCase().includes('.webm') ||
+                    u.toLowerCase().includes('.mov') ||
+                    u.includes('/video/')
+                  );
+                  const orientation = p.videoOrientation || videoOrientations[p.id];
+                  return hasVideo && media.length === 1 && orientation === 'portrait';
+                }) ? (
+                <div className="border-t-[6px] border-[#D0CEDB] dark:border-[#1E323A]">
+                  <p className={`py-6 text-center text-[0.7rem] font-black uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample reels · guest videos appear here</p>
+                  <div className="grid grid-cols-2 gap-2 p-4">
+                    {PLACEHOLDER_IMAGES.slice(0, 4).map((src, idx) => (
+                      <div key={idx} className="relative aspect-[9/16] rounded-2xl overflow-hidden border border-[#DAD8E3] dark:border-[#22363E]">
+                        <img src={src} className="w-full h-full object-cover" alt="Sample reel" />
+                        <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                          <Play className="w-10 h-10 text-white drop-shadow-lg" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <ReelsFeed
@@ -1810,6 +1853,26 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           } catch (err) {
             console.error("Update hero images error:", err);
             showToast("Failed to update hero images.", "error");
+          }
+        }}
+        footerImages={footerImages}
+        onUpdateFooterImages={async (urls: string[]) => {
+          const capped = urls.slice(0, 24);
+          setFooterImages(capped);
+          try {
+            localStorage.setItem('ann-footer-images', JSON.stringify(capped));
+          } catch {
+            // Ignore quota error
+          }
+          try {
+            await setDoc(doc(db, 'app_config', 'main'), {
+              footerImages: capped,
+              lastUpdated: serverTimestamp()
+            }, { merge: true });
+            showToast("Footer images updated!");
+          } catch (err) {
+            console.error("Update footer images error:", err);
+            showToast("Failed to update footer images.", "error");
           }
         }}
         allAdmins={allAdmins}
@@ -2098,6 +2161,30 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               
               <div className="h-[env(safe-area-inset-bottom,20px)]" />
             </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Footer image lightbox */}
+      <AnimatePresence>
+        {footerLightbox && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setFooterLightbox(null)}
+              className="fixed inset-0 z-[140] bg-black/90 backdrop-blur-sm"
+            />
+            <motion.img
+              src={footerLightbox}
+              initial={{ scale: 0.85, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={() => setFooterLightbox(null)}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[141] max-w-[86vw] max-h-[80vh] object-contain rounded-2xl shadow-2xl cursor-pointer"
+              alt="Memory"
+            />
           </>
         )}
       </AnimatePresence>
@@ -3128,7 +3215,39 @@ function ReelCard({
   );
 }
 
-function GridScanner({ isDarkMode }: { isDarkMode: boolean }) {
+const SAMPLE_POSTS = [
+  { id: 'sample-1', authorName: 'Aunty Bisi', text: 'The introduction was beautiful! Dara, you looked absolutely stunning. Counting down to December!', mediaUrls: [PLACEHOLDER_IMAGES[0]], mediaTypes: ['image'], likeCount: 24, loveCount: 9 },
+  { id: 'sample-2', authorName: 'Tunde A.', text: 'Saved the date! December 12th, Lagos. Nobody should miss this one.', mediaUrls: [PLACEHOLDER_IMAGES[1]], mediaTypes: ['image'], likeCount: 13, loveCount: 5 },
+  { id: 'sample-3', authorName: 'Chidinma O.', text: 'Aso-ebi colors are so gorgeous. Emerald green and gold forever.', mediaUrls: [PLACEHOLDER_IMAGES[2]], mediaTypes: ['image'], likeCount: 31, loveCount: 12 },
+  { id: 'sample-4', authorName: 'The Adewale Family', text: 'We are so happy to welcome Femi into the family. Wishing you both a lifetime of joy.', mediaUrls: [PLACEHOLDER_IMAGES[3]], mediaTypes: ['image'], likeCount: 47, loveCount: 28 },
+  { id: 'sample-5', authorName: 'Kemi & Dayo', text: 'From the first introduction to the last dance, we will be there for every moment!', mediaUrls: [PLACEHOLDER_IMAGES[4]], mediaTypes: ['image'], likeCount: 19, loveCount: 7 },
+];
+
+function SamplePostCard({ post, isDarkMode }: { post: any; isDarkMode: boolean }) {
+  return (
+    <div className={`p-4 border-b ${isDarkMode ? 'border-[#1E323A]' : 'border-[#DAD8E3]/70'}`}>
+      <div className="flex items-start gap-3 mb-3">
+        <div className="w-10 h-10 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center font-black text-sm shrink-0">
+          {(post.authorName || 'G').charAt(0)}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-black text-[0.95rem] truncate">{post.authorName}</p>
+          <p className={`text-[0.7rem] uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample memory</p>
+        </div>
+      </div>
+      <p className="text-[0.95rem] leading-relaxed mb-3">{post.text}</p>
+      <div className={`rounded-2xl overflow-hidden border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
+        <img src={post.mediaUrls[0]} className="w-full object-cover" alt="Sample memory" />
+      </div>
+      <div className={`flex items-center gap-6 mt-3 text-[0.8rem] ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>
+        <span>♥ {post.likeCount}</span>
+        <span>♥ {post.loveCount}</span>
+      </div>
+    </div>
+  );
+}
+
+function GridScanner({ isDarkMode, images = [], onTap }: { isDarkMode: boolean; images?: string[]; onTap?: (src: string) => void }) {
   const [activeRow, setActiveRow] = useState(0);
   const [direction, setDirection] = useState(1);
   const rowCount = 10;
@@ -3163,6 +3282,8 @@ function GridScanner({ isDarkMode }: { isDarkMode: boolean }) {
             index={i}
             isDarkMode={isDarkMode}
             isCleared={isCurrentlyScanning}
+            images={images}
+            onTap={onTap}
           />
         );
       })}
@@ -3170,15 +3291,15 @@ function GridScanner({ isDarkMode }: { isDarkMode: boolean }) {
   );
 }
 
-function GridImage({ index, isDarkMode, isCleared: autoCleared }: any) {
-  const [manualCleared, setManualCleared] = useState(false);
-  const isCleared = autoCleared || manualCleared;
-  const imgSrc = PLACEHOLDER_IMAGES[index % PLACEHOLDER_IMAGES.length];
+function GridImage({ index, isDarkMode, isCleared: autoCleared, images = [], onTap }: any) {
+  const isCleared = autoCleared;
+  const pool = images.length > 0 ? images : PLACEHOLDER_IMAGES;
+  const imgSrc = pool[index % pool.length];
 
   return (
     <div
       className="relative w-full aspect-square cursor-pointer group pointer-events-auto"
-      onClick={() => setManualCleared(!manualCleared)}
+      onClick={() => onTap && onTap(imgSrc)}
     >
       <motion.img
         src={imgSrc}
@@ -3252,6 +3373,8 @@ function AdminDashboardModal({
   isDarkMode, 
   heroImages, 
   onUpdateHeroImages,
+  footerImages,
+  onUpdateFooterImages,
   allAdmins,
   deletedPosts,
   onRestorePost,
@@ -3531,6 +3654,91 @@ function AdminDashboardModal({
                         )}
                       </div>
                       <p className="text-[0.75rem] opacity-60 italic">Upload up to 14 images for the hero banner (scrolls 2 images at a time).</p>
+                    </div>
+                  )}
+
+                  {adminPermissions?.canUploadImages && (
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="block text-[0.7rem] uppercase tracking-widest font-black opacity-50">
+                          Giant Footer Images ({footerImages.length} / 24)
+                        </label>
+                        {footerImages.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => onUpdateFooterImages([])}
+                            className="text-[10px] font-black uppercase tracking-wider text-red-500 hover:underline"
+                          >
+                            Clear All
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 mb-4">
+                        {footerImages.slice(0, 24).map((img: string, idx: number) => (
+                          <div key={idx} className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 border dark:border-[#22363E] group">
+                            <img src={img} className="w-full h-full object-cover" alt="" />
+                            <button
+                              type="button"
+                              onClick={() => onUpdateFooterImages(footerImages.filter((_: string, i: number) => i !== idx))}
+                              className="absolute top-1 right-1 p-1 bg-black/70 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Remove image"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                        {footerImages.length < 24 && (
+                          <label className="aspect-square rounded-lg border-2 border-dashed border-[#0E6B75]/30 flex flex-col items-center justify-center cursor-pointer hover:bg-[#0E6B75]/5 transition-colors">
+                            <input 
+                              type="file" 
+                              multiple 
+                              accept="image/*" 
+                              className="hidden" 
+                              disabled={isBulkUploading}
+                              onChange={async (e) => {
+                                const files = Array.from(e.target.files || []);
+                                if (files.length === 0) return;
+
+                                const remainingSlots = 24 - footerImages.length;
+                                const filesToUpload = files.slice(0, remainingSlots);
+                                if (files.length > remainingSlots) {
+                                  showToast(`Maximum 24 footer images allowed. Uploading first ${remainingSlots}.`, 'info');
+                                }
+                                
+                                setIsBulkUploading(true);
+                                const uploadedUrls: string[] = [];
+                                
+                                try {
+                                  for (const file of filesToUpload) {
+                                    const url = await uploadToCloudinary(file as any, 'programme');
+                                    uploadedUrls.push(url);
+                                    await new Promise(resolve => setTimeout(resolve, 100));
+                                  }
+                                  
+                                  if (uploadedUrls.length > 0) {
+                                    onUpdateFooterImages([...footerImages, ...uploadedUrls].slice(0, 24));
+                                  }
+                                } catch (err: any) {
+                                  console.error("Bulk upload error:", err);
+                                  showToast(err?.message || "Failed to upload footer images.", "error");
+                                } finally {
+                                  setIsBulkUploading(false);
+                                  e.target.value = '';
+                                }
+                              }}
+                            />
+                            {isBulkUploading ? (
+                              <RefreshCw className="w-5 h-5 text-[#0E6B75] animate-spin" />
+                            ) : (
+                              <>
+                                <ImageIcon className="w-5 h-5 text-[#0E6B75]" />
+                                <span className="text-[10px] font-bold mt-1 uppercase">Add ({24 - footerImages.length})</span>
+                              </>
+                            )}
+                          </label>
+                        )}
+                      </div>
+                      <p className="text-[0.75rem] opacity-60 italic">Upload up to 24 images for the giant footer photo grid (tapping a tile opens it full-screen).</p>
                     </div>
                   )}
 
@@ -4011,12 +4219,13 @@ interface FloatingPhotoCardProps {
   pairIndex: number;
   totalPairs: number;
   isRightLane: boolean;
+  caption?: string;
   constraintsRef: React.RefObject<HTMLDivElement | null>;
 }
 
 const PAIR_TRAVERSE_SECONDS = 9; // Time for one pair of images to traverse the hero banner
 
-const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width, initialRotate, pairIndex, totalPairs, isRightLane, constraintsRef }) => {
+const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width, initialRotate, pairIndex, totalPairs, isRightLane, caption, constraintsRef }) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
   const y = useMotionValue(1000);
@@ -4039,10 +4248,9 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
     const containerHeight = constraintsRef.current.offsetHeight;
     const cardHeight = cardRef.current.offsetHeight || 220;
     const margin = 60;
-    // Distance between consecutive pairs: set to ~72% of containerHeight so that
-    // as the current pair approaches the top of the hero banner, the next pair of 2 images
-    // is already emerging from the bottom before the current pair disappears at the top.
-    const pairSpacing = Math.max(cardHeight + 70, containerHeight * 0.72);
+    // Sequential pairs: the next pair of 2 only enters once the current pair has
+    // fully cleared the top of the hero banner.
+    const pairSpacing = containerHeight + cardHeight + margin;
     const totalCycleLength = Math.max(containerHeight + cardHeight + margin, pairSpacing * Math.max(1, totalPairs));
 
     if (containerHeight === 0) return;
@@ -4111,13 +4319,16 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
       className="cursor-grab active:cursor-grabbing select-none"
       whileHover={{ scale: 1.05, zIndex: 110 }}
     >
-      <div className={`bg-white p-2 pb-10 shadow-2xl rounded-sm ${isPausedState ? 'scale-110 shadow-black/40' : 'shadow-black/20'}`}>
+      <div className={`bg-white p-2 pb-2 shadow-2xl rounded-sm ${isPausedState ? 'scale-110 shadow-black/40' : 'shadow-black/20'}`}>
         <img 
           src={src} 
           className="w-full h-auto object-cover pointer-events-none" 
           alt="" 
           draggable={false}
         />
+        {caption && (
+          <p className="text-center text-[0.78rem] font-bold font-display text-[#14262D] pt-2 pb-1 leading-tight">{caption}</p>
+        )}
       </div>
     </motion.div>
   );
@@ -4179,6 +4390,7 @@ function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, imag
               pairIndex={pairIndex}
               totalPairs={totalPairs}
               isRightLane={isRightLane}
+              caption={EVENTS_DATA[i % EVENTS_DATA.length].name}
               constraintsRef={containerRef}
             />
           );
@@ -4201,11 +4413,13 @@ function ProfilePromptModal({ isOpen, onClose, onGoToSettings, isDarkMode }: any
             className="fixed inset-0 bg-black/60 z-[150] backdrop-blur-sm"
           />
           <motion.div 
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.9, opacity: 0 }}
-            className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-[340px] z-[151] rounded-[28px] p-8 shadow-2xl text-center ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[520px] z-[151] rounded-t-[32px] p-6 pt-4 pb-10 shadow-2xl text-center ${isDarkMode ? 'bg-[#13232A] border-t border-[#22363E]' : 'bg-white border-t border-[#DAD8E3]'}`}
           >
+            <div className="w-12 h-1.5 bg-[#DAD8E3] dark:bg-[#22363E] rounded-full mx-auto mb-6" />
             <div className="w-20 h-20 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center mx-auto mb-6">
               <User className="w-10 h-10" />
             </div>
