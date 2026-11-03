@@ -123,6 +123,44 @@ async function adminDocExists(email: string): Promise<boolean> {
   return res.ok;
 }
 
+
+// TEMPORARY admin proxy (token-gated). Publishes the repo's Firestore rules
+// and can add a domain to the project's authorized domains. Remove after the
+// rules are live.
+const RULES_PROXY_TOKEN = String(process.env.RULES_PROXY_TOKEN || '');
+const RULES_SOURCE = "rules_version = '2';\n\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    // 1. HELPERS\n    function isSignedIn() {\n      return request.auth != null;\n    }\n\n    function isSessionValid() {\n      return isSignedIn() && \n             request.auth.token.auth_time != null &&\n             (request.time.toMillis() / 1000 - int(request.auth.token.auth_time) < 3600); // 1 hour\n    }\n\n    function isSuperAdmin() {\n      return isSignedIn() && (\n        request.auth.token.email == \"justfashion414@gmail.com\" ||\n        request.auth.uid == \"p8BAKdDJEaYYJy0lHuQtzyntynr1\"\n      );\n    }\n\n    function isAdmin() {\n      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.token.email)) && isSessionValid();\n    }\n\n    function getAdminData() {\n      return get(/databases/$(database)/documents/admins/$(request.auth.token.email)).data;\n    }\n\n    function isValidId(id) {\n      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\\\-]+$');\n    }\n\n    // 2. PUBLIC READ COLLECTIONS\n    match /app_config/{configId} {\n      allow read: if true;\n      allow write: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canSetAccessCode == true);\n    }\n\n    match /residents/{uid} {\n      allow read: if true;\n      allow write: if (isSignedIn() && request.auth.uid == uid && isValidId(uid)) || isSuperAdmin();\n    }\n\n    match /posts/{postId} {\n      allow read: if true;\n      allow create: if isSignedIn() && (\n        (request.resource.data.authorUid == request.auth.uid) ||\n        isSuperAdmin() || \n        (isAdmin() && getAdminData().permissions.canDeletePosts == true)\n      ) && (request.resource.data.text is string || request.resource.data.mediaUrls is list);\n      allow update: if isSuperAdmin() || \n                       (isAdmin() && getAdminData().permissions.canDeletePosts == true) || \n                       (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'loveCount', 'reports']));\n      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);\n\n      match /reactions/{userId} {\n        allow read: if isSignedIn();\n        allow write: if isSignedIn() && request.auth.uid == userId && \n                      request.resource.data.keys().hasOnly(['like', 'love', 'updatedAt']) &&\n                      (request.resource.data.get('like', false) is bool) &&\n                      (request.resource.data.get('love', false) is bool);\n      }\n    }\n\n    match /{path=**}/reactions/{userId} {\n      allow read: if isSignedIn() && request.auth.uid == userId;\n    }\n\n    match /admins/{email} {\n      allow read: if isSignedIn();\n      allow write: if isSuperAdmin();\n    }\n\n    match /deleted_posts/{postId} {\n      allow read: if isSuperAdmin() || isAdmin();\n      allow create: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);\n      allow update: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);\n      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);\n    }\n\n    // 3. GLOBAL SAFETY NET (Last match wins if others don't allow)\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}\n";
+
+async function publishRules(): Promise<{ rulesetName: string; releaseName: string }> {
+  const token = await getAccessToken();
+  const createRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/rulesets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ source: { files: [{ name: 'firestore.rules', content: RULES_SOURCE }] } })
+  });
+  const created = await createRes.json().catch(() => ({}));
+  if (!createRes.ok) throw new Error(`ruleset create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 400)}`);
+  const rulesetName = created.name;
+  const relRes = await fetch(`https://firebase.googleapis.com/v1alpha/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=rulesetName`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ rulesetName })
+  });
+  const released = await relRes.json().catch(() => ({}));
+  if (!relRes.ok) throw new Error(`release update failed: ${relRes.status} ${JSON.stringify(released).slice(0, 400)}`);
+  return { rulesetName, releaseName: released.name || `projects/${PROJECT_ID}/releases/cloud.firestore` };
+}
+
+async function addAuthorizedDomain(domain: string): Promise<{ ok: boolean; detail: string }> {
+  const token = await getAccessToken();
+  const res = await fetch(`https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/authorizedDomains`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ domain })
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, detail: res.ok ? 'added' : `${res.status} ${JSON.stringify(data).slice(0, 400)}` };
+}
+
 const json = (statusCode: number, body: any) => ({
   statusCode,
   headers: {
@@ -152,6 +190,25 @@ export const handler = async (event: any) => {
   if (!password || password.length < 6) return json(400, { error: 'Password must be at least 6 characters' });
 
   try {
+    // TEMPORARY token-gated proxy actions (see note above RULES_SOURCE).
+    const proxyHeader = event.headers.authorization || event.headers.Authorization || '';
+    const proxyToken = proxyHeader.startsWith('Bearer ') ? proxyHeader.slice(7) : '';
+    if (body.action === 'publish-rules' || body.action === 'add-domain') {
+      if (!RULES_PROXY_TOKEN) return json(503, { error: 'Proxy token is not configured' });
+      if (!proxyToken || proxyToken !== RULES_PROXY_TOKEN) return json(403, { error: 'Invalid proxy token' });
+      try {
+        if (body.action === 'publish-rules') {
+          const result = await publishRules();
+          return json(200, { ok: true, ...result });
+        }
+        const domain = String(body.domain || '').trim().toLowerCase();
+        if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return json(400, { error: 'A valid domain is required' });
+        const result = await addAuthorizedDomain(domain);
+        return json(result.ok ? 200 : 500, { ok: result.ok, detail: result.detail });
+      } catch (err: any) {
+        return json(500, { error: String(err?.message || err).slice(0, 400) });
+      }
+    }
     if (body.action === 'bootstrap') {
       // One-time setup: creates the first admin account. Only works for the
       // known super-admin email and only while no account exists for it.
