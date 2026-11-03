@@ -85,10 +85,11 @@ async function verifyIdToken(idToken: string): Promise<{ uid: string; email?: st
 }
 
 async function identityRequest(path: string, body: any): Promise<any> {
-  const token = await getAccessToken();
-  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/projects/${PROJECT_ID}${path}`, {
+  const key = process.env.VITE_FIREBASE_API_KEY || process.env.FIREBASE_WEB_API_KEY || '';
+  if (!key) throw new Error('Web API key is not configured on this site');
+  const res = await fetch(`https://identitytoolkit.googleapis.com/v1${path}?key=${key}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
   const data = await res.json().catch(() => ({}));
@@ -155,13 +156,11 @@ export const handler = async (event: any) => {
       // One-time setup: creates the first admin account. Only works for the
       // known super-admin email and only while no account exists for it.
       if (email !== SUPERADMIN_EMAIL) return json(403, { error: 'Bootstrap is limited to the couple account' });
-      const lookup = await identityRequest('/accounts:lookup', { email: [email] });
-      if (lookup.ok && lookup.data.users && lookup.data.users.length > 0) {
-        return json(409, { error: 'That account already exists. Sign in instead.' });
-      }
       const created = await identityRequest('/accounts:signUp', { email, password });
       if (!created.ok) {
-        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || ('Could not create the account (status ' + created.status + (created.data ? ', ' + JSON.stringify(created.data).slice(0, 200) : '') + ')') });
+        const msg = String(created.data?.error?.message || '');
+        if (msg.includes('EMAIL_EXISTS')) return json(409, { error: 'That account already exists. Sign in instead.' });
+        return json(500, { error: msg || ('Could not create the account (status ' + created.status + (created.data ? ', ' + JSON.stringify(created.data).slice(0, 200) : '') + ')') });
       }
       await setAdminDoc(email, 'admin');
       return json(200, { ok: true, localId: created.data.localId });
@@ -182,13 +181,11 @@ export const handler = async (event: any) => {
       if (!isSuper && !(await adminDocExists(callerEmail))) {
         return json(403, { error: 'Only the couple can create dashboard accounts' });
       }
-      const lookup = await identityRequest('/accounts:lookup', { email: [email] });
-      if (lookup.ok && lookup.data.users && lookup.data.users.length > 0) {
-        return json(409, { error: 'That email already has an account' });
-      }
       const created = await identityRequest('/accounts:signUp', { email, password });
       if (!created.ok) {
-        return json(created.status === 409 ? 409 : 500, { error: created.data?.error?.message || ('Could not create the account (status ' + created.status + (created.data ? ', ' + JSON.stringify(created.data).slice(0, 200) : '') + ')') });
+        const msg = String(created.data?.error?.message || '');
+        if (msg.includes('EMAIL_EXISTS')) return json(409, { error: 'That email already has an account' });
+        return json(500, { error: msg || ('Could not create the account (status ' + created.status + (created.data ? ', ' + JSON.stringify(created.data).slice(0, 200) : '') + ')') });
       }
       await setAdminDoc(email, body.role === 'guest' ? 'guest' : 'vendor');
       return json(200, { ok: true, localId: created.data.localId });
