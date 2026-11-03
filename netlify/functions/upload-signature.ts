@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { verifyFirebaseIdToken, isVerifiedUser, getProjectId, unauthorized, notVerified } from './_verify';
 
 // Helper to sign Cloudinary upload parameters using Node built-in crypto (zero external deps required)
 function signCloudinaryParams(params: Record<string, string | number>, apiSecret: string): string {
@@ -25,6 +26,14 @@ export const handler = async (event: any) => {
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, headers, body: '' };
   }
+
+  // Auth gate: only a signed-in, verified guest (or admin) may get upload signatures.
+  const caller = await verifyFirebaseIdToken(
+    event.headers?.authorization || event.headers?.Authorization,
+    getProjectId()
+  );
+  if (!caller) return unauthorized(headers);
+  if (!(await isVerifiedUser(caller.uid, getProjectId()))) return notVerified(headers);
 
   const folder = event.queryStringParameters?.folder || 'ire-akari';
 

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { verifyFirebaseIdToken, isVerifiedUser, getProjectId, unauthorized, notVerified } from './_verify';
 import { v2 as cloudinary } from 'cloudinary';
 
 function getCloudinaryCredentials() {
@@ -82,6 +83,14 @@ export const handler = async (event: any) => {
       body: JSON.stringify({ error: 'Method Not Allowed' }),
     };
   }
+
+  // Auth gate: only a signed-in, verified guest (or admin) may upload through the proxy.
+  const caller = await verifyFirebaseIdToken(
+    event.headers?.authorization || event.headers?.Authorization,
+    getProjectId()
+  );
+  if (!caller) return unauthorized(headers);
+  if (!(await isVerifiedUser(caller.uid, getProjectId()))) return notVerified(headers);
 
   const { cloudName, apiKey, apiSecret } = getCloudinaryCredentials();
   if (!cloudName || !apiKey || !apiSecret) {
