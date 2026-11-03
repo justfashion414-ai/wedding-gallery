@@ -37,7 +37,6 @@ import {
   Edit3,
   Download
 } from 'lucide-react';
-import AnniversarySection from './AnniversarySection';
 import { db, auth } from '../lib/firebase';
 import { get, set, del } from 'idb-keyval';
 import { signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
@@ -133,15 +132,43 @@ export interface AdItem {
   createdAt?: number;
 }
 
-const DAYS_DATA = [
-  { l: "Mon", n: "30", events: [{ h: 9, t: "9:00am", title: "Road Show", v: "Estate Road & Surroundings" }] },
-  { l: "Tue", n: "1", events: [{ h: 10, t: "10:00am", title: "Health Talk / Medical Outreach", v: "Clubhouse Hall" }] },
-  { l: "Wed", n: "2", events: [{ h: 16, t: "4:00pm", title: "Novelty Match", v: "Estate Field" }] },
-  { l: "Thu", n: "3", events: [{ h: 16, t: "4:00pm", title: "Novelty Match Final", v: "Estate Field" }] },
-  { l: "Fri", n: "4", events: [{ h: 13, t: "1:00pm", title: "Jumat Prayer", v: "Central Mosque" }, { h: 16, t: "4:00pm", title: "Indoor Games", v: "Clubhouse" }] },
-  { l: "Sat", n: "5", events: [{ h: 7, t: "7:00am", title: "Health Walk", v: "Estate Road" }, { h: 11, t: "11:00am", title: "Interdenominational Prayer", v: "Clubhouse" }, { h: 17, t: "5:00pm", title: "Grand Finale", v: "Clubhouse Lawn" }] },
-  { l: "Sun", n: "6", events: [{ h: 9, t: "9:00am", title: "Thanksgiving Service", v: "Clubhouse Hall" }] }
+interface WeddingEvent {
+  id: string;
+  name: string;
+  type: string;
+  date: string; // YYYY-MM-DD
+  time?: string; // 24h HH:MM
+  desc: string;
+}
+
+const WEDDING_DATE = '2026-12-12';
+const WEDDING_TIME = '11:00';
+
+const EVENTS_DATA: WeddingEvent[] = [
+  { id: 'intro', name: 'Introduction', type: 'Traditional introduction', date: '2026-06-20', desc: 'Both families meet, gifts are exchanged and the journey becomes official.' },
+  { id: 'engage', name: 'Engagement', type: 'Engagement ceremony', date: '2026-07-18', desc: 'The ring, the yes and the first big celebration together.' },
+  { id: 'court', name: 'Court Wedding', type: 'Registry', date: '2026-08-28', desc: 'Signing the register with our closest people.' },
+  { id: 'shower', name: 'Bridal Shower', type: "Dara's party", date: '2026-11-21', desc: 'An afternoon of games, gifts and girls with the bride.' },
+  { id: 'stag', name: "Groom's Party", type: "Femi's party", date: '2026-11-28', desc: 'The groomsmen send Femi off in style.' },
+  { id: 'church', name: 'Church Wedding', type: 'Holy matrimony', date: '2026-12-12', time: '11:00', desc: 'Vows before God, family and friends.' },
+  { id: 'reception', name: 'Reception', type: 'Hall celebration', date: '2026-12-12', time: '15:00', desc: 'Food, music, aso-ebi and the first dance.' },
+  { id: 'thanks', name: 'Thanksgiving', type: 'Thanksgiving service', date: '2026-12-13', desc: 'We close the weekend giving thanks together.' },
 ];
+
+const JOURNEY_STATES: string[] = (() => {
+  const now = Date.now();
+  let nextFound = false;
+  return EVENTS_DATA.map((e) => {
+    const t = new Date(`${e.date}T${e.time || '12:00'}:00`).getTime();
+    if (t < now) return 'done';
+    if (!nextFound) { nextFound = true; return 'next'; }
+    return 'todo';
+  });
+})();
+
+const JOURNEY_DATES: string[] = EVENTS_DATA.map((e) =>
+  new Date(`${e.date}T${e.time || '12:00'}:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+);
 
 const normalizeCode = (v: string) => v.trim().toUpperCase();
 
@@ -294,7 +321,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [fontSize, setFontSize] = useState<'m' | 'l' | 'xl'>('m');
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [activeDay, setActiveDay] = useState(0);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [newPostText, setNewPostText] = useState('');
   const [accessCode, setAccessCode] = useState('');
@@ -337,8 +363,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }
     return [];
   });
-  const [dayImages, setDayImages] = useState<string[]>(new Array(7).fill(''));
-  const [estateWebsiteUrl, setEstateWebsiteUrl] = useState('https://ire-akari.estate');
   const [postAds, setPostAds] = useState<AdItem[]>([]);
   const [reelAds, setReelAds] = useState<AdItem[]>([]);
   const [shuffledPostAds, setShuffledPostAds] = useState<AdItem[]>([]);
@@ -613,20 +637,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     };
   }, [user]);
 
-  // Sync user reactions for the Jubilee Documentary
-  useEffect(() => {
-    if (!user) return;
-    const reactionRef = doc(db, 'posts', 'jubilee_documentary', 'reactions', user.uid);
-    const unsub = onSnapshot(reactionRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setUserLikes(prev => ({ ...prev, jubilee_documentary: !!data.like }));
-        setUserLoves(prev => ({ ...prev, jubilee_documentary: !!data.love }));
-      }
-    });
-    return () => unsub();
-  }, [user]);
-
   // Handle Reactions Logic
   const handleToggleReaction = async (postId: string, type: 'like' | 'love') => {
     if (!user) {
@@ -702,12 +712,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
             // Ignore storage quota error
           }
         }
-        if (data.dayImages && data.dayImages.length > 0) {
-          setDayImages(data.dayImages);
-        }
-        if (data.estateWebsiteUrl) {
-          setEstateWebsiteUrl(data.estateWebsiteUrl);
-        }
         if (Array.isArray(data.postAds)) {
           setPostAds(data.postAds);
           const copy = [...data.postAds];
@@ -745,27 +749,11 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         const snap = await getDoc(doc(db, 'app_config', 'main'));
         if (!snap.exists()) {
           await setDoc(doc(db, 'app_config', 'main'), { 
-            activeAccessCode: 'IRE2026',
-            estateWebsiteUrl: 'https://ire-akari.estate',
+            activeAccessCode: 'DARAFEMI26',
             createdAt: serverTimestamp()
           });
         }
 
-        // Initialize Jubilee Documentary stats
-        const docRef = doc(db, 'posts', 'jubilee_documentary');
-        const docSnap = await getDoc(docRef);
-        if (!docSnap.exists()) {
-          await setDoc(docRef, {
-            id: 'jubilee_documentary',
-            authorName: 'Committee',
-            text: 'Ire-Akari at 30: A Documentary',
-            mediaUrls: ['https://res.cloudinary.com/qgvszym1/video/upload/v1784929959/Untitled_video_3_1_cafnet.mp4'],
-            likeCount: 0,
-            loveCount: 0,
-            timestamp: serverTimestamp(),
-            isFeatured: true
-          });
-        }
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, 'app_config/main');
         console.error("Config initialization error:", err);
@@ -1056,14 +1044,15 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
   const getDayPhase = () => {
     const now = new Date();
-    const start = new Date('2026-11-30T00:00:00');
-    const end = new Date('2026-12-07T00:00:00');
+    const start = new Date(`${WEDDING_DATE}T${WEDDING_TIME}:00`);
+    const end = new Date('2026-12-14T00:00:00');
     if (now < start) return 'before';
     if (now > end) return 'after';
     return 'during';
   };
 
   const phase = getDayPhase();
+  const daysToGo = Math.max(0, Math.ceil((new Date(`${WEDDING_DATE}T${WEDDING_TIME}:00`).getTime() - Date.now()) / 86400000));
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? 'bg-[#0B171C] text-[#E8EEF0]' : 'bg-[#EEEDF3] text-[#14262D]'} font-sans pb-32`}>
@@ -1076,40 +1065,31 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
             exit={{ opacity: 0, scale: 1.04, filter: 'blur(8px)' }}
             transition={{ duration: 0.65, ease: [0.22, 1, 0.36, 1] }}
             onClick={() => setShowLaunchSplash(false)}
-            className="fixed inset-0 z-[500] overflow-hidden flex items-center justify-center bg-[#EEEDF3] dark:bg-[#0B171C] cursor-pointer select-none"
+            className="fixed inset-0 z-[500] overflow-hidden flex items-center justify-center bg-[#0B3A41] cursor-pointer select-none"
           >
-            {/* THE GIANT NAME: IRE AKARI ESTATE · SOKA, IBADAN (PLAIN TEXT ONLY) */}
-            <div className="relative z-10 flex flex-col items-center max-w-full px-4 text-center pointer-events-none">
+            {/* SPLASH: DARA & FEMI */}
+            <div className="relative z-10 flex flex-col items-center max-w-full px-6 text-center pointer-events-none">
               <motion.div
-                initial={{ scale: 0.88, opacity: 0, y: 18 }}
+                initial={{ scale: 0.94, opacity: 0, y: 14 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 transition={{ duration: 0.75, ease: "circOut" }}
               >
-                <h1 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase mb-0 text-[#0E6B75] drop-shadow-sm">
-                  I&nbsp;RE AKARI
+                <p className="text-[0.95rem] font-medium tracking-wide text-[#BCD4D8] m-0 mb-4">Together with their families</p>
+                <h1 className="font-serif-display text-white text-[clamp(3.4rem,17vw,5.6rem)] leading-[0.95] m-0">
+                  Dara
+                  <span className="block italic text-[clamp(1.5rem,7.5vw,2.1rem)] text-[#C8932A] my-3">and</span>
+                  Femi
                 </h1>
-                <h2 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase flex items-center justify-center gap-[0.05em] text-[#0E6B75] drop-shadow-sm">
-                  <span>ESTATE</span>
-                  <motion.div
-                    animate={{ scale: [1, 1.2, 1], rotate: [0, 12, 0] }}
-                    transition={{ repeat: Infinity, duration: 4 }}
-                    className="w-[0.3em] h-[0.3em] rounded-full bg-[#0E6B75] opacity-80"
-                  />
-                </h2>
+                <p className="text-[#BCD4D8] text-[1rem] mt-6 mb-0">Wedding memories, kept for life.</p>
               </motion.div>
-
-              <motion.div
-                initial={{ opacity: 0, width: 0 }}
-                animate={{ opacity: 1, width: '100%' }}
-                transition={{ delay: 0.3, duration: 0.9 }}
-                className="flex items-center gap-4 mt-10 sm:mt-12 w-full max-w-md mx-auto"
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.75 }}
+                transition={{ delay: 0.9, duration: 0.8 }}
+                className="mt-10 text-[0.8rem] text-white"
               >
-                <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
-                <p className="text-[clamp(0.8rem,3vw,1.5rem)] font-display font-black tracking-[0.4em] uppercase whitespace-nowrap opacity-60 text-[#0E6B75]">
-                  Soka, Ibadan
-                </p>
-                <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
-              </motion.div>
+                Tap to enter
+              </motion.p>
             </div>
           </motion.section>
         )}
@@ -1120,7 +1100,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         <header className={`sticky top-0 z-[60] backdrop-blur-md px-5 py-3.5 border-b transition-colors ${isDarkMode ? 'bg-[#0B171C]/80 border-[#22363E]' : 'bg-[#EEEDF3]/80 border-[#DAD8E3]'}`}>
           <div className="max-w-[520px] mx-auto flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <h1 className="text-[1.15rem] font-black font-display tracking-[-0.01em] leading-none text-[#0E6B75]">Ire-Akari</h1>
+              <h1 className="text-[1.25rem] font-serif-display italic font-medium tracking-[0] leading-none text-[#0E6B75]">Dara &amp; Femi</h1>
               {!isOnline && (
                 <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-500 text-[10px] font-black uppercase tracking-wider">
                   Offline
@@ -1204,59 +1184,74 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               exit={{ opacity: 0 }}
               className="space-y-0"
             >
-              {/* HERO - EXACT REPLICATION */}
-              <div className="rounded-[28px] p-[26px_22px_22px] text-[#F2F7F8] bg-[#0B3A43] relative overflow-hidden shadow-xl" style={{
-                background: 'radial-gradient(120% 90% at 88% 0%, #1F7380 0%, transparent 55%), radial-gradient(90% 80% at 0% 100%, #3A2F63 0%, transparent 62%), #0B3A43'
+              {/* COUPLE BANNER - DARA & FEMI */}
+              <div className="rounded-[28px] p-[26px_22px_26px] text-[#F2F7F8] relative overflow-hidden shadow-xl" style={{
+                background: 'linear-gradient(135deg, #0B3A41 0%, #3A2F63 100%)'
               }}>
-                <div className="flex items-end gap-[14px]">
-                  <p className="text-[clamp(6.5rem,34vw,9.5rem)] font-black font-display leading-[0.78] tracking-[-0.05em] m-0 animate-sheen text-transparent bg-clip-text" aria-label="30">30</p>
-                  <div className="pb-1">
-                    <strong className="block text-[1.3rem] font-display leading-[1.15]">years of<br/>Ire-Akari</strong>
-                    <span className="block text-[0.85rem] opacity-[0.82] mt-1">Pearl anniversary week</span>
-                  </div>
-                </div>
+                <p className="m-0 text-center text-[0.92rem] font-medium text-[#C8932A]">Together with their families</p>
+                <h2 className="text-center font-serif-display text-white text-[clamp(2.7rem,13vw,3.6rem)] leading-[1] mt-3 mb-0">
+                  Dara
+                  <span className="block italic text-[clamp(1.3rem,6vw,1.6rem)] text-[#C8932A] my-2">and</span>
+                  Femi
+                </h2>
+                <p className="text-center text-[0.95rem] opacity-[0.85] mt-4 mb-0 max-w-[34ch] mx-auto leading-snug">are getting married. Share every moment with us, from the first introduction to the last dance.</p>
 
                 {showProfilePrompt && !isAdmin && (
                   <div className="mt-5 bg-white/10 border border-white/20 rounded-[20px] p-4 flex items-center justify-between gap-4 backdrop-blur-md">
                     <div className="flex-1">
                       <b className="text-[0.95rem] font-display block mb-0.5">Complete your profile</b>
-                      <p className="text-[0.8rem] opacity-80 m-0 leading-tight">Add your name and photo to join the community wall.</p>
+                      <p className="text-[0.8rem] opacity-80 m-0 leading-tight">Add your name and photo so the couple knows who is sharing.</p>
                     </div>
-                    <button 
+                    <button
                       onClick={() => setActiveTab('settings')}
-                      className="whitespace-nowrap px-4 py-2 bg-white text-[#0B3A43] rounded-full text-[0.75rem] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-all"
+                      className="whitespace-nowrap px-4 py-2 bg-white text-[#0B3A41] rounded-full text-[0.75rem] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-all"
                     >
                       Set Up
                     </button>
                   </div>
                 )}
-                
-                {phase === 'before' && <CountdownTimer targetDate={new Date('2026-11-30T00:00:00')} isDarkMode={isDarkMode} />}
+
+                {phase === 'before' && (
+                  <div className="mt-5 mx-auto flex items-stretch justify-center bg-white/10 border border-white/25 rounded-[18px] py-3.5 backdrop-blur-md divide-x divide-white/25">
+                    <div className="px-5 text-center">
+                      <b className="block text-[1.5rem] font-serif-display leading-none">{daysToGo}</b>
+                      <span className="block text-[0.68rem] uppercase tracking-wider opacity-75 mt-1.5">days to go</span>
+                    </div>
+                    <div className="px-5 text-center">
+                      <b className="block text-[1.5rem] font-serif-display leading-none">12 Dec</b>
+                      <span className="block text-[0.68rem] uppercase tracking-wider opacity-75 mt-1.5">2026</span>
+                    </div>
+                    <div className="px-5 text-center">
+                      <b className="block text-[1.5rem] font-serif-display leading-none">Lagos</b>
+                      <span className="block text-[0.68rem] uppercase tracking-wider opacity-75 mt-1.5">Nigeria</span>
+                    </div>
+                  </div>
+                )}
 
                 {phase === 'during' && (
                   <div className="mt-5 bg-white/10 border border-white/14 rounded-[18px] p-[14px_16px]">
                     <div className="flex items-center gap-2 mb-0.5">
                       <div className="w-2 h-2 rounded-full bg-[#7CF2B0]" />
-                      <b className="text-[1.05rem] font-display">Day 1 of 7, happening now</b>
+                      <b className="text-[1.05rem] font-serif-display">It&apos;s the wedding day</b>
                     </div>
-                    <p className="text-[0.9rem] opacity-[0.9] m-0">Next: Opening ceremony at 5:00pm, Clubhouse lawn</p>
+                    <p className="text-[0.9rem] opacity-[0.9] m-0">Share what you are seeing. We are keeping it all.</p>
                   </div>
                 )}
 
                 {phase === 'after' && (
                   <div className="mt-5 bg-white/10 border border-white/14 rounded-[18px] p-[14px_16px]">
-                    <b className="text-[1.05rem] font-display">Thank you for 30 wonderful years</b>
-                    <p className="text-[0.9rem] opacity-[0.9] m-0">The week is over, but the memories are still coming in.</p>
+                    <b className="text-[1.05rem] font-serif-display">The memories are here to stay</b>
+                    <p className="text-[0.9rem] opacity-[0.9] m-0">Every moment from the weekend, kept for life.</p>
                   </div>
                 )}
 
-                <button 
+                <button
                   onClick={() => setActiveTab('feed')}
-                  className="mt-4 inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_18px] font-bold bg-white text-[#0B3A43] text-sm hover:scale-105 transition-all group"
+                  className="mt-5 inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_18px] font-bold bg-white text-[#0B3A41] text-sm hover:scale-105 transition-all"
                 >
-                  See what neighbours are posting
-                  <motion.span 
-                    animate={{ x: [0, 5, 0] }} 
+                  See what guests are posting
+                  <motion.span
+                    animate={{ x: [0, 5, 0] }}
                     transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
                     className="flex items-center"
                   >
@@ -1265,203 +1260,109 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </button>
               </div>
 
-              {/* VIDEO & THREE DECADES LEGACY SECTION */}
-              <div className="mt-8 mb-4">
-                <div className="text-center max-w-3xl mx-auto mb-8 px-4">
-                  <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-[#0E6B75]/10 border border-[#0E6B75]/30 rounded-full text-[#0E6B75] mb-4">
-                    <PartyPopper className="w-4 h-4" />
-                    <span className="text-[10px] font-black uppercase tracking-[0.2em]">30th Anniversary Jubilee</span>
-                  </div>
-                  <h2 className="text-3xl font-display font-black tracking-tight mb-4">Three Decades of Legacy</h2>
-                  <p className={`text-sm font-medium leading-relaxed ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
-                    Celebrating 30 years of serene environments and community strength since 1996.
+              {/* OUR STORY */}
+              <section className="mt-8">
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Our story</h2>
+                <p className={`text-[0.95rem] leading-relaxed m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+                  Dara and Femi met at a friend&apos;s book launch in 2022. Four years, two families and one very patient pastor later, here we are. This page keeps every moment of it in one place, for life.
+                </p>
+                <div className={`p-[16px_18px] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                  <strong className="block mb-0.5 text-[0.93rem]">How to share</strong>
+                  <p className={`m-0 text-[0.93rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+                    Tap Feed to browse, then tap Send to post a photo, video, reel or written wish. No email or password needed.
                   </p>
                 </div>
+              </section>
 
-                {/* Documentary Video */}
-                <div className="flex flex-col items-center justify-center mb-8 relative">
-                  <div className="relative w-full max-w-[280px] aspect-[9/16] rounded-[24px] overflow-hidden border-4 border-[#0E6B75] shadow-2xl bg-black group/video">
-                    <video
-                      src="https://res.cloudinary.com/qgvszym1/video/upload/v1784929959/Untitled_video_3_1_cafnet.mp4"
-                      className="w-full h-full object-cover"
-                      loop
-                      playsInline
-                      autoPlay
-                      muted
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover/video:opacity-100 transition-opacity" />
-                  </div>
-                </div>
-              </div>
-
-              {/* THE WEEK - EXACT REPLICATION */}
+              {/* THE JOURNEY */}
               <section className="mt-8">
-                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">The week</h2>
-                <div className="flex gap-2 overflow-x-auto no-scrollbar p-[2px_2px_10px]">
-                  {DAYS_DATA.map((d, i) => (
-                    <button 
-                      key={i} 
-                      onClick={() => setActiveDay(i)}
-                      className={`flex-shrink-0 border rounded-[16px] p-[8px_14px] text-center min-w-[64px] transition-colors ${activeDay === i ? 'bg-[#0E6B75] border-[#0E6B75] text-white' : (isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]')}`}
-                    >
-                      <small className={`block text-[0.75rem] ${activeDay === i ? 'opacity-[0.85]' : 'text-[#5A6970]'}`}>{d.l}</small>
-                      <b className="text-[1.05rem] font-display">{d.n}{i === 0 ? ' Nov' : ' Dec'}</b>
-                    </button>
-                  ))}
-                </div>
-
-                {/* Day-specific Image (Three Decades Legacy Linked) */}
-                <div className={`mb-3 rounded-[24px] overflow-hidden border aspect-video bg-black/5 dark:bg-white/5 relative ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-                  <AnimatePresence mode="wait">
-                    {dayImages[activeDay] ? (
-                      <motion.img 
-                        key={dayImages[activeDay]}
-                        initial={{ opacity: 0, scale: 1.1 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.9 }}
-                        transition={{ duration: 0.4 }}
-                        src={dayImages[activeDay]} 
-                        className="w-full h-full object-cover" 
-                        alt={`Programme Day ${activeDay + 1}`} 
-                      />
-                    ) : (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center opacity-20">
-                        <ImageIcon className="w-10 h-10 mb-2" />
-                        <span className="text-[10px] font-black uppercase tracking-widest">No photo set for this day</span>
-                      </div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                <div className={`rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                  {DAYS_DATA[activeDay].events.map((e, idx) => {
-                    const id = `day-${activeDay}-ev-${idx}`;
-                    const isBookmarked = bookmarks.includes(id);
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_4px] leading-[1.25]">The journey</h2>
+                <p className={`text-[0.9rem] m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Tap any event to see its memories.</p>
+                <div className="ml-[10px] pl-[20px] border-l-[3px] border-[#DAD8E3] dark:border-[#22363E] space-y-3">
+                  {EVENTS_DATA.map((e, i) => {
+                    const st = JOURNEY_STATES[i];
+                    const cnt = posts.filter((p: any) => p?.eventId === e.id).length;
+                    const tagCls = st === 'done'
+                      ? 'bg-[#0E6B75]/10 text-[#0E6B75] border-[#0E6B75]/30'
+                      : st === 'next'
+                        ? 'bg-[#C8932A]/15 text-[#C8932A] border-[#C8932A]/40'
+                        : (isDarkMode ? 'bg-white/5 text-[#93A4AB] border-[#22363E]' : 'bg-[#EEEDF3] text-[#5A6970] border-[#DAD8E3]');
+                    const dotCls = st === 'done'
+                      ? 'bg-[#0E6B75] border-[#0E6B75]'
+                      : st === 'next'
+                        ? 'bg-[#C8932A] border-[#C8932A] shadow-[0_0_0_5px_rgba(200,147,42,0.18)]'
+                        : (isDarkMode ? 'bg-[#0B171C] border-[#93A4AB]' : 'bg-[#EEEDF3] border-[#5A6970]');
                     return (
-                      <div key={idx} className="flex gap-[14px] p-[14px_14px_14px_16px] items-start border-t first:border-t-0 border-[#DAD8E3] dark:border-[#22363E]">
-                        <div className="flex-shrink-0 w-[62px] font-display font-semibold text-[0.95rem] pt-[1px]">{e.t}</div>
-                        <div className="flex-1 min-w-0">
-                          <strong className="block leading-[1.3] text-sm">{e.title}</strong>
-                          <span className={`text-[0.88rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.v}</span>
+                      <button key={e.id} onClick={() => setActiveTab('feed')} className="relative block w-full text-left border-0 bg-transparent p-0 group">
+                        <span className={`absolute -left-[30px] top-[20px] w-[14px] h-[14px] rounded-full border-[3px] ${dotCls}`} />
+                        <div className={`rounded-[18px] border p-[14px_16px] transition-colors ${isDarkMode ? 'bg-[#13232A] border-[#22363E] group-hover:border-[#2FB3BF]/50' : 'bg-white border-[#DAD8E3] group-hover:border-[#0E6B75]/40'}`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <b className="text-[1rem] font-serif-display leading-tight">{e.name}</b>
+                            <span className={`flex-shrink-0 px-2.5 py-0.5 rounded-full border text-[10px] font-black uppercase tracking-wider ${tagCls}`}>
+                              {st === 'done' ? 'Done' : st === 'next' ? 'Next up' : 'Upcoming'}
+                            </span>
+                          </div>
+                          <small className={`block text-[0.78rem] mt-0.5 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.type} · {JOURNEY_DATES[i]}</small>
+                          <p className={`text-[0.9rem] m-0 mt-1.5 leading-snug ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.desc}</p>
+                          <small className={`block text-[0.72rem] font-bold uppercase tracking-wider mt-2 ${st === 'next' ? 'text-[#C8932A]' : 'text-[#0E6B75]'}`}>
+                            {cnt > 0 ? `${cnt} ${cnt === 1 ? 'memory' : 'memories'} shared` : 'Be the first to share'}
+                          </small>
                         </div>
-                        <button 
-                          onClick={() => toggleBookmark(id)}
-                          className={`border-0 bg-transparent p-1.5 rounded-[10px] transition-colors ${isBookmarked ? 'text-[#0E6B75]' : 'text-[#5A6970]'}`}
-                        >
-                          <BookmarkIcon active={isBookmarked} />
-                        </button>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
               </section>
 
-              {/* OUR STORY - EXACT REPLICATION */}
+              {/* WEDDING DAY DETAILS */}
               <section className="mt-8">
-                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Our story</h2>
-                <ol className="m-0 p-[6px_4px_0_4px] list-none">
-                  <TimelineItem year="1996" title="First keys handed over" desc="The first families moved in and the road to the gate was still sand." isDarkMode={isDarkMode} />
-                  <TimelineItem year="2003" title="Residents' association formed" desc="Neighbours organised to run security, water and sanitation together." isDarkMode={isDarkMode} />
-                  <TimelineItem year="2011" title="Borehole and perimeter fence" desc="Paid for by the residents themselves." isDarkMode={isDarkMode} />
-                  <TimelineItem year="2018" title="Clubhouse opens" desc="A home for weddings, meetings and Sunday football viewing." isDarkMode={isDarkMode} />
-                  <TimelineItem year="2026" title="Thirty years" desc="One week to celebrate everyone who built this place." isNow isDarkMode={isDarkMode} />
-                </ol>
-              </section>
-
-              {/* GOOD TO KNOW - EXACT REPLICATION */}
-              <section className="mt-8">
-                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Good to know</h2>
-                <div className={`p-[16px_18px] rounded-[20px] border mb-2.5 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                  <strong className="block mb-0.5 text-[0.93rem]">Dress code</strong>
-                  <p className={`m-0 text-[0.93rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
-                    Day 1 and Day 7: pearl white with one colour of your choice. Day 5: wear your block colours.
-                  </p>
-                </div>
-                <div className={`p-[16px_18px] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                  <strong className="block mb-0.5 text-[0.93rem]">Parking and gate access</strong>
-                  <p className={`m-0 text-[0.93rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
-                    Guest cars park on the field behind Block D from 4pm each evening. Gate staff will hold the guest list.
-                  </p>
-                </div>
-              </section>
-
-              {/* GET IN TOUCH - EXACT REPLICATION */}
-              <section className="mt-8">
-                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Get in touch</h2>
-                <div className={`p-[18px] flex flex-col gap-3 items-start rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                  <p className="m-0 text-[0.93rem]">
-                    <strong className="font-bold">Anniversary committee</strong><br/>
-                    <span className={`${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Clubhouse, Ire-Akari Estate</span>
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <a href="tel:+2340000000000" className="inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_18px] font-bold bg-[#E1EFF0] dark:bg-[#173039] text-[#0E6B75] dark:text-[#4FC3CF] text-sm hover:scale-105 transition-transform">
-                      <PhoneIcon />
-                      Call committee
-                    </a>
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Wedding day</h2>
+                <p className={`text-[0.9rem] m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Saturday, 12 December 2026</p>
+                <div className={`p-[16px_18px] rounded-[20px] border space-y-3.5 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                  <div>
+                    <strong className="block text-[0.93rem]">Church wedding · 11:00 am</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Redeemed Chapel, Ikeja, Lagos</p>
+                  </div>
+                  <div className={`border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`} />
+                  <div>
+                    <strong className="block text-[0.93rem]">Reception · 3:00 pm</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>The Grand Hall, Victoria Island, Lagos</p>
+                  </div>
+                  <div className={`border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`} />
+                  <div>
+                    <strong className="block text-[0.93rem]">Aso-ebi: emerald green and gold</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Share your looks with <span className="font-bold text-[#0E6B75] dark:text-[#2FB3BF]">#DaraAndFemi2026</span></p>
                   </div>
                 </div>
               </section>
 
-              {/* Giant Stylized Footer with Interactive Photo Grid Background */}
-              <section className="relative overflow-hidden w-screen left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-[700px] sm:min-h-[850px] flex items-center justify-center bg-[#EEEDF3] dark:bg-[#0B171C]">
-                {/* INTERACTIVE PHOTO GRID BACKGROUND with AUTOMATIC SCANNING EFFECT */}
-                <div className="absolute inset-0 z-0 grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 auto-rows-fr opacity-60">
-                  <GridScanner isDarkMode={isDarkMode} />
+              {/* OUR VENDORS */}
+              <section className="mt-8">
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_4px] leading-[1.25]">Our vendors</h2>
+                <p className={`text-[0.9rem] m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Official media partners. They upload full albums here.</p>
+                <div className="flex gap-3">
+                  <div className={`flex-1 p-[14px_16px] rounded-[18px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <b className="block text-[0.95rem] font-serif-display">Lens &amp; Light Studio</b>
+                    <span className={`block text-[0.78rem] mt-0.5 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Photographer</span>
+                  </div>
+                  <div className={`flex-1 p-[14px_16px] rounded-[18px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <b className="block text-[0.95rem] font-serif-display">Kiln Films</b>
+                    <span className={`block text-[0.78rem] mt-0.5 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Videographer</span>
+                  </div>
                 </div>
+              </section>
 
-                {/* THE OVERLAID NAME */}
-                <motion.div
-                  initial="initial"
-                  whileInView="animate"
-                  viewport={{ once: false, amount: 0.4 }}
-                  className="relative z-10 flex flex-col items-center max-w-full px-4 text-center pointer-events-none"
+              {/* CTA */}
+              <section className="mt-8 mb-2">
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Say something to the couple</h2>
+                <button
+                  onClick={() => setActiveTab('feed')}
+                  className="w-full border-0 rounded-[16px] py-3.5 font-bold bg-[#0E6B75] text-white text-[0.95rem] hover:scale-[1.02] active:scale-[0.98] transition-all"
                 >
-                  <motion.div
-                    initial={{ scale: 0.9, opacity: 0 }}
-                    whileInView={{ scale: 1, opacity: 1 }}
-                    transition={{ duration: 0.8, ease: "circOut" }}
-                  >
-                    <h2 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase mb-0 text-[#0E6B75] drop-shadow-sm">
-                      I&nbsp;RE AKARI
-                    </h2>
-                    <h2 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase flex items-center justify-center gap-[0.05em] text-[#0E6B75] drop-shadow-sm">
-                      <span>ESTATE</span>
-                      <motion.div 
-                        animate={{ scale: [1, 1.2, 1], rotate: [0, 12, 0] }}
-                        transition={{ repeat: Infinity, duration: 4 }}
-                        className="w-[0.3em] h-[0.3em] rounded-full bg-[#0E6B75] opacity-80" 
-                      />
-                    </h2>
-                  </motion.div>
-                  
-                  <motion.div 
-                    initial={{ opacity: 0, width: 0 }}
-                    whileInView={{ opacity: 1, width: '100%' }}
-                    transition={{ delay: 0.4, duration: 1 }}
-                    className="flex items-center gap-4 mt-12 w-full max-w-md mx-auto"
-                  >
-                    <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
-                    <p className="text-[clamp(0.8rem,3vw,1.5rem)] font-display font-black tracking-[0.4em] uppercase whitespace-nowrap opacity-60 text-[#0E6B75]">
-                      Soka, Ibadan
-                    </p>
-                    <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
-                  </motion.div>
-                </motion.div>
+                  Open the feed
+                </button>
               </section>
 
-              {/* Footer Links */}
-              <footer className="py-10 text-center border-t border-[#DAD8E3] dark:border-[#22363E] mt-12 bg-white/50 dark:bg-black/20 backdrop-blur-sm rounded-[32px] mx-4">
-                <div className="flex flex-col items-center gap-3">
-                  <div className="flex flex-col items-center">
-                    <h4 className="text-[1.1rem] font-black font-display text-[#0E6B75] mb-1">Ire-Akari Estate</h4>
-                    <p className={`text-xs ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Pearl Anniversary 1996 - 2026</p>
-                  </div>
-                  
-                  <div className="pt-2 opacity-40">
-                     <p className="text-[0.65rem] font-bold uppercase tracking-widest">Built for the community</p>
-                  </div>
-                </div>
-              </footer>
             </motion.div>
           )}
 
@@ -1556,7 +1457,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           key={p.id}
                           id={p.id}
                           isDarkMode={isDarkMode}
-                          name={p.authorName || 'Resident'}
+                          name={p.authorName || 'Guest'}
                           text={p.text}
                           time={formattedDate}
                           mediaUrls={p.mediaUrls}
@@ -1648,7 +1549,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               exit={{ opacity: 0 }}
               className="space-y-0"
             >
-              <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[14px_4px_12px] leading-[1.25]">Resident Profile</h2>
+              <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[14px_4px_12px] leading-[1.25]">Guest Profile</h2>
               <div className={`p-[24px_18px] rounded-[24px] border mb-6 flex flex-col items-center gap-6 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                 <div className="relative group">
                   <div className={`w-28 h-24 rounded-full overflow-hidden border-4 ${isDarkMode ? 'border-[#0B171C]' : 'border-[#EEEDF3]'} bg-[#0E6B75] flex items-center justify-center text-white text-3xl font-black`}>
@@ -1760,13 +1661,13 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">About</h2>
               <div className={`p-[4px_0] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                 <div className="p-[14px_18px]">
-                  <strong className="block text-[1rem]">Ire-Akari 30</strong>
-                  <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Pearl Anniversary Community Portal. Established 1996.</small>
+                  <strong className="block text-[1rem]">Dara &amp; Femi 2026</strong>
+                  <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Wedding Memories Portal. Made with love.</small>
                 </div>
                 <div className="p-[14px_18px] flex items-center justify-between gap-4 border-t border-[#DAD8E3] dark:border-[#22363E]">
                   <div>
                     <strong className="block text-[1rem]">Report a problem</strong>
-                    <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Tell the committee if something looks wrong</small>
+                    <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Tell the couple if something looks wrong</small>
                   </div>
                   <button className="inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_18px] font-bold bg-[#E1EFF0] dark:bg-[#173039] text-[#0E6B75] dark:text-[#4FC3CF] text-sm">Report</button>
                 </div>
@@ -1783,7 +1684,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     }}
                     className={`text-xs font-bold tracking-wide select-none cursor-pointer ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}
                   >
-                    Happy 30th Anniversary
+                    Happy Wedding, Dara &amp; Femi
                   </span>
                 </div>
               </div>
@@ -1798,7 +1699,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           <ShieldCheck className="w-6 h-6" />
                         </div>
                         <div>
-                          <strong className="block text-[1rem]">Committee Control</strong>
+                          <strong className="block text-[1rem]">Couple Control</strong>
                           <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Manage access codes and settings</small>
                         </div>
                       </div>
@@ -1842,32 +1743,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           } catch (err) {
             console.error("Update hero images error:", err);
             showToast("Failed to update hero images.", "error");
-          }
-        }}
-        dayImages={dayImages}
-        onUpdateDayImages={async (urls: string[]) => {
-          try {
-            await setDoc(doc(db, 'app_config', 'main'), {
-              dayImages: urls,
-              lastUpdated: serverTimestamp()
-            }, { merge: true });
-            showToast("Programme images updated!");
-          } catch (err) {
-            console.error("Update day images error:", err);
-            showToast("Failed to update programme images.", "error");
-          }
-        }}
-        estateWebsiteUrl={estateWebsiteUrl}
-        onUpdateEstateUrl={async (url: string) => {
-          try {
-            await setDoc(doc(db, 'app_config', 'main'), {
-              estateWebsiteUrl: url,
-              lastUpdated: serverTimestamp()
-            }, { merge: true });
-            showToast("Estate website link updated!");
-          } catch (err) {
-            console.error("Update estate url error:", err);
-            showToast("Failed to update website link.", "error");
           }
         }}
         allAdmins={allAdmins}
@@ -1949,7 +1824,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               </div>
 
               <textarea 
-                placeholder="What's happening in Ire-Akari?"
+                placeholder="What's happening at the celebration?"
                 value={newPostText}
                 onChange={(e) => setNewPostText(e.target.value)}
                 className={`w-full min-h-[140px] p-4 rounded-2xl border-none outline-none resize-none text-[1.05rem] font-medium transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
@@ -2106,7 +1981,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
                         await addDoc(collection(db, 'posts'), {
                           authorUid: user.uid,
-                          authorName: displayName || 'Resident',
+                          authorName: displayName || 'Guest',
                           authorPhoto: finalAvatarUrl || null,
                           text: newPostText,
                           mediaUrls: finalMediaUrls,
@@ -2136,7 +2011,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                         setIsPosting(false);
                       }
                     } else {
-                      showToast('Invalid access code. Check with committee.', 'error');
+                      showToast('Invalid access code. Check with the couple.', 'error');
                     }
                   }}
                   className={`px-8 py-3.5 rounded-full font-black text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
@@ -2235,7 +2110,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     30
                   </div>
                   <div>
-                    <h3 className="text-lg font-black font-display leading-tight">Install Ire-Akari App</h3>
+                    <h3 className="text-lg font-black font-display leading-tight">Install Dara &amp; Femi</h3>
                     <p className={`text-xs ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
                       Add to your Home Screen for quick &amp; offline access
                     </p>
@@ -2309,7 +2184,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       
       {activeMediaIndex && (
         <MediaLightbox 
-          post={posts.find(p => p.id === activeMediaIndex.postId) || (activeMediaIndex.postId === 'jubilee_documentary' ? { id: 'jubilee_documentary', authorName: 'Committee', mediaUrls: ['https://res.cloudinary.com/qgvszym1/video/upload/v1784929959/Untitled_video_3_1_cafnet.mp4'] } : null)}
+          post={posts.find(p => p.id === activeMediaIndex.postId) || null}
           initialIndex={activeMediaIndex.index}
           isDarkMode={isDarkMode}
           onClose={() => setActiveMediaIndex(null)}
@@ -2345,7 +2220,7 @@ function WhatsAppIcon({ className = "w-7 h-7" }: { className?: string }) {
 
 function ShareSheet({ post, isDarkMode, onClose, showToast }: any) {
   const shareUrl = `${window.location.origin}${window.location.pathname}?post=${post.id || post.uid}`;
-  const title = post.text || 'Check out this memory from Ire-Akari Estate 30th Anniversary!';
+  const title = post.text || 'Check out this memory from Dara & Femi's wedding!';
 
   const shareOptions = [
     { 
@@ -2518,33 +2393,6 @@ function MediaLightbox({ post, initialIndex, isDarkMode, onClose }: any) {
         <p className="text-[10px] uppercase font-black tracking-widest opacity-40 mt-2">By {post.authorName}</p>
       </div>
     </div>
-  );
-}
-
-function BookmarkIcon({ active }: { active: boolean }) {
-  return (
-    <svg className={`w-[22px] h-[22px] fill-none stroke-current stroke-[1.8] ${active ? 'fill-current' : ''}`} viewBox="0 0 24 24">
-      <path d="M7 4h10v16l-5-4-5 4z"/>
-    </svg>
-  );
-}
-
-function PhoneIcon() {
-  return (
-    <svg className="w-[19px] h-[19px] fill-none stroke-current stroke-[1.8]" viewBox="0 0 24 24">
-      <path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2z"/>
-    </svg>
-  );
-}
-
-function TimelineItem({ year, title, desc, isNow, isDarkMode }: { year: string; title: string; desc: string; isNow?: boolean; isDarkMode: boolean }) {
-  return (
-    <li className={`relative p-[0_0_22px_86px] before:absolute before:left-[64px] before:top-[6px] before:bottom-[-6px] before:w-[2px] ${isNow ? '' : 'before:bg-[#DAD8E3] dark:before:bg-[#22363E]'} last:before:hidden`}>
-      <div className={`absolute left-[58px] top-[6px] w-[14px] h-[14px] rounded-full shadow-[0_0_0_4px_var(--bg)] transition-all ${isNow ? 'bg-[#C9A24B] shadow-[0_0_0_4px_#EEEDF3,0_0_0_6px_#C9A24B] dark:shadow-[0_0_0_4px_#0B171C,0_0_0_6px_#C9A24B]' : 'bg-[#0E6B75]'}`} />
-      <time className="absolute left-0 top-0 w-[52px] text-right font-black font-display text-[1.1rem] tracking-tighter">{year}</time>
-      <strong className="block leading-[1.3] text-sm">{title}</strong>
-      <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{desc}</p>
-    </li>
   );
 }
 
@@ -3139,7 +2987,7 @@ function ReelCard({
           </div>
           <div className="min-w-0 flex-1">
             <strong className="block text-sm font-bold leading-tight truncate">
-              {reel.isAd ? (reel.sponsorName || 'Featured Partner') : (reel.authorName || 'Resident')}
+              {reel.isAd ? (reel.sponsorName || 'Featured Partner') : (reel.authorName || 'Guest')}
             </strong>
             <span className="text-[0.75rem] text-white/70">
               {reel.isAd ? 'Sponsored Video' : formattedDate}
@@ -3213,150 +3061,6 @@ function ReelCard({
   );
 }
 
-function CountdownTimer({ targetDate, isDarkMode }: { targetDate: Date; isDarkMode: boolean }) {
-  const [timeLeft, setTimeLeft] = useState({ d: 0, h: 0, m: 0, s: 0 });
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = new Date().getTime();
-      const distance = targetDate.getTime() - now;
-      if (distance < 0) { clearInterval(timer); return; }
-      setTimeLeft({
-        d: Math.floor(distance / (1000 * 60 * 60 * 24)),
-        h: Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)),
-        m: Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60)),
-        s: Math.floor((distance % (1000 * 60)) / 1000)
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [targetDate]);
-
-  return (
-    <div className="grid grid-cols-4 gap-2 mt-[22px]">
-      <TimerBlock value={timeLeft.d} label="days" />
-      <TimerBlock value={timeLeft.h} label="hours" />
-      <TimerBlock value={timeLeft.m} label="mins" />
-      <TimerBlock value={timeLeft.s} label="secs" />
-    </div>
-  );
-}
-
-function TimerBlock({ value, label }: { value: number; label: string }) {
-  const displayValue = value.toString().padStart(2, '0');
-  
-  return (
-    <div className="bg-white/10 border border-white/14 rounded-[16px] p-[10px_4px_8px] text-center overflow-hidden">
-      <div className="h-8 relative">
-        <AnimatePresence mode="popLayout">
-          <motion.b 
-            key={value}
-            initial={{ y: 30, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -30, opacity: 0 }}
-            transition={{ 
-              duration: 0.5, 
-              ease: [0.34, 1.56, 0.64, 1] // Springy bounce for rolling feel
-            }}
-            className="absolute inset-0 block text-[1.6rem] font-display leading-[1.1] font-mono"
-          >
-            {displayValue}
-          </motion.b>
-        </AnimatePresence>
-      </div>
-      <small className="text-[0.72rem] opacity-[0.8] mt-1 block uppercase font-bold tracking-wider">{label}</small>
-    </div>
-  );
-}
-
-function GridScanner({ isDarkMode }: { isDarkMode: boolean }) {
-  const [activeRow, setActiveRow] = useState(0);
-  const [direction, setDirection] = useState(1); 
-  const rowCount = 10;
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setActiveRow(prev => {
-        let next = prev + direction;
-        if (next >= rowCount - 1) {
-          setDirection(-1);
-          return rowCount - 1;
-        }
-        if (next <= 0) {
-          setDirection(1);
-          return 0;
-        }
-        return next;
-      });
-    }, 1500); 
-    return () => clearInterval(timer);
-  }, [direction, rowCount]);
-
-  return (
-    <>
-      {Array.from({ length: 80 }).map((_, i) => {
-        const colCount = 10; 
-        const rowIdx = Math.floor(i / colCount);
-        // Only the active row is "cleared" (showing image clearly)
-        const isCurrentlyScanning = rowIdx === activeRow;
-        
-        return (
-          <GridImage 
-            key={i} 
-            index={i} 
-            isDarkMode={isDarkMode} 
-            isCleared={isCurrentlyScanning} 
-          />
-        );
-      })}
-    </>
-  );
-}
-
-function GridImage({ index, isDarkMode, isCleared: autoCleared }: any) {
-  const [manualCleared, setManualCleared] = useState(false);
-  const isCleared = autoCleared || manualCleared;
-  
-  const images = [
-    'https://images.unsplash.com/photo-1531427186611-ecfd6d936c79?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1472653425572-fa511b1ea9be?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=200&q=80'
-  ];
-  
-  const imgSrc = images[index % images.length];
-
-  return (
-    <div 
-      className="relative w-full aspect-square cursor-pointer group pointer-events-auto"
-      onClick={() => setManualCleared(!manualCleared)}
-    >
-      <motion.img 
-        src={imgSrc} 
-        animate={{ 
-          filter: isCleared ? 'grayscale(0%) brightness(1.1)' : 'grayscale(100%) brightness(0.8)',
-          scale: isCleared ? 1.05 : 1
-        }}
-        className="w-full h-full object-cover transition-all duration-700" 
-        alt="" 
-      />
-      <motion.div 
-        initial={{ opacity: 1 }}
-        animate={{ opacity: isCleared ? 0 : 1 }}
-        transition={{ duration: 0.8 }}
-        className={`absolute inset-0 pointer-events-none transition-colors ${isDarkMode ? 'bg-[#0B171C]/80' : 'bg-[#EEEDF3]/85'}`}
-      />
-    </div>
-  );
-}
-
-
-
 function DeleteConfirmationModal({ isOpen, onClose, onConfirm, isDarkMode }: any) {
   return (
     <AnimatePresence>
@@ -3410,10 +3114,6 @@ function AdminDashboardModal({
   isDarkMode, 
   heroImages, 
   onUpdateHeroImages,
-  dayImages,
-  onUpdateDayImages,
-  estateWebsiteUrl,
-  onUpdateEstateUrl,
   allAdmins,
   deletedPosts,
   onRestorePost,
@@ -3428,7 +3128,6 @@ function AdminDashboardModal({
   onUpdateReelAds
 }: any) {
   const [newCode, setNewCode] = useState(activeCode ?? '');
-  const [newUrl, setNewUrl] = useState(estateWebsiteUrl ?? 'https://ire-akari.estate');
   const [isDirty, setIsDirty] = useState(false);
   const [isBulkUploading, setIsBulkUploading] = useState(false);
   const [activeAdminTab, setActiveAdminTab] = useState('settings');
@@ -3457,13 +3156,12 @@ function AdminDashboardModal({
     setAdMediaTypes(type === 'reel' ? ['video'] : []);
   };
 
-  // Sync newCode & newUrl with live values
+  // Sync newCode with live value
   useEffect(() => {
     if (isOpen && !isDirty) {
       setNewCode(activeCode ?? '');
-      setNewUrl(estateWebsiteUrl ?? 'https://ire-akari.estate');
     }
-  }, [activeCode, estateWebsiteUrl, isOpen, isDirty]);
+  }, [activeCode, isOpen, isDirty]);
 
   // Reset dirty flag when closing/opening
   useEffect(() => {
@@ -3707,98 +3405,8 @@ function AdminDashboardModal({
                         </div>
                         
                         <div className="space-y-6">
-                          <div>
-                            <label className="block text-[0.65rem] uppercase tracking-widest font-black mb-2 opacity-50">Main Estate Website URL</label>
-                            <div className="flex gap-2">
-                              <input 
-                                type="url"
-                                value={newUrl}
-                                onChange={(e) => {
-                                  setNewUrl(e.target.value);
-                                  setIsDirty(true);
-                                }}
-                                className={`flex-1 p-3.5 rounded-xl border-none outline-none font-medium transition-colors text-sm ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
-                                placeholder="https://..."
-                              />
-                              <button 
-                                onClick={async () => {
-                                  await onUpdateEstateUrl(newUrl);
-                                  setIsDirty(false);
-                                }}
-                                className="px-5 bg-[#0E6B75] text-white rounded-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap"
-                              >
-                                <Check className="w-4 h-4" />
-                                <span className="text-[10px] font-black uppercase tracking-widest">Save</span>
-                              </button>
-                            </div>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <a
-                                href={newUrl || estateWebsiteUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={`flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest transition-all ${
-                                  isDarkMode
-                                    ? 'border-[#22363E] bg-[#0B171C] text-[#4FC3CF] hover:bg-[#22363E]'
-                                    : 'border-[#DAD8E3] bg-white text-[#0E6B75] hover:bg-[#EEEDF3]'
-                                }`}
-                              >
-                                <ExternalLink className="w-4 h-4" />
-                                Open Main Website
-                              </a>
-                              {onBackToMain && (
-                                <button
-                                  onClick={() => {
-                                    onClose();
-                                    onBackToMain();
-                                  }}
-                                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#0E6B75] text-white text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all"
-                                >
-                                  <Home className="w-4 h-4" />
-                                  View Legacy Site
-                                </button>
-                              )}
-                            </div>
-                          </div>
-
-                          <div>
-                            <label className="block text-[0.65rem] uppercase tracking-widest font-black mb-3 opacity-50 tracking-normal">Three Decades Legacy (Programme Day Images 1-7)</label>
-                            <div className="grid grid-cols-4 gap-2">
-                              {DAYS_DATA.map((day, idx) => (
-                                <div key={idx} className="space-y-1">
-                                  <label className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 border dark:border-[#22363E] flex flex-col items-center justify-center cursor-pointer group">
-                                    <input 
-                                      type="file" 
-                                      accept="image/*" 
-                                      className="hidden" 
-                                      onChange={async (e) => {
-                                        const file = e.target.files?.[0];
-                                        if (!file) return;
-                                        
-                                        showToast(`Uploading image for Day ${idx + 1}...`);
-                                        const url = await uploadToCloudinary(file as any, 'programme');
-                                        const newDayImages = [...dayImages];
-                                        newDayImages[idx] = url;
-                                        onUpdateDayImages(newDayImages);
-                                      }}
-                                    />
-                                    {dayImages[idx] ? (
-                                      <>
-                                        <img src={dayImages[idx]} className="w-full h-full object-cover group-hover:opacity-40 transition-opacity" alt="" />
-                                        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 flex items-center justify-center">
-                                          <RefreshCw className="w-5 h-5 text-white" />
-                                        </div>
-                                      </>
-                                    ) : (
-                                      <Plus className="w-5 h-5 text-[#0E6B75]/40" />
-                                    )}
-                                  </label>
-                                  <span className="block text-[8px] text-center font-black uppercase opacity-40">{day.l}</span>
-                                </div>
-                              ))}
-                            </div>
-                            <p className="text-[0.6rem] opacity-50 mt-3 italic">Upload an image for each day of the anniversary week. These will appear when users select the day in the programme.</p>
-                          </div>
-                        </div>
+                          
+                                                  </div>
                       </div>
                     </div>
                   )}

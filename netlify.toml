@@ -26,12 +26,6 @@
   force = true
 
 [[redirects]]
-  from = "/api/images"
-  to = "/.netlify/functions/images"
-  status = 200
-  force = true
-
-[[redirects]]
   from = "/api/health"
   to = "/.netlify/functions/health"
   status = 200
