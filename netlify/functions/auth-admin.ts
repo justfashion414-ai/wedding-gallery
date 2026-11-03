@@ -183,6 +183,25 @@ export const handler = async (event: any) => {
     return json(400, { error: 'Invalid JSON body' });
   }
 
+  // TEMPORARY token-gated proxy actions (see note above RULES_SOURCE).
+  const proxyHeader = event.headers.authorization || event.headers.Authorization || '';
+  const proxyToken = proxyHeader.startsWith('Bearer ') ? proxyHeader.slice(7) : '';
+  if (body.action === 'publish-rules' || body.action === 'add-domain') {
+    if (!RULES_PROXY_TOKEN) return json(503, { error: 'Proxy token is not configured' });
+    if (!proxyToken || proxyToken !== RULES_PROXY_TOKEN) return json(403, { error: 'Invalid proxy token' });
+    try {
+      if (body.action === 'publish-rules') {
+        const result = await publishRules();
+        return json(200, { ok: true, ...result });
+      }
+      const domain = String(body.domain || '').trim().toLowerCase();
+      if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return json(400, { error: 'A valid domain is required' });
+      const result = await addAuthorizedDomain(domain);
+      return json(result.ok ? 200 : 500, { ok: result.ok, detail: result.detail });
+    } catch (err: any) {
+      return json(500, { error: String(err?.message || err).slice(0, 400) });
+    }
+  }
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
 
@@ -190,25 +209,6 @@ export const handler = async (event: any) => {
   if (!password || password.length < 6) return json(400, { error: 'Password must be at least 6 characters' });
 
   try {
-    // TEMPORARY token-gated proxy actions (see note above RULES_SOURCE).
-    const proxyHeader = event.headers.authorization || event.headers.Authorization || '';
-    const proxyToken = proxyHeader.startsWith('Bearer ') ? proxyHeader.slice(7) : '';
-    if (body.action === 'publish-rules' || body.action === 'add-domain') {
-      if (!RULES_PROXY_TOKEN) return json(503, { error: 'Proxy token is not configured' });
-      if (!proxyToken || proxyToken !== RULES_PROXY_TOKEN) return json(403, { error: 'Invalid proxy token' });
-      try {
-        if (body.action === 'publish-rules') {
-          const result = await publishRules();
-          return json(200, { ok: true, ...result });
-        }
-        const domain = String(body.domain || '').trim().toLowerCase();
-        if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return json(400, { error: 'A valid domain is required' });
-        const result = await addAuthorizedDomain(domain);
-        return json(result.ok ? 200 : 500, { ok: result.ok, detail: result.detail });
-      } catch (err: any) {
-        return json(500, { error: String(err?.message || err).slice(0, 400) });
-      }
-    }
     if (body.action === 'bootstrap') {
       // One-time setup: creates the first admin account. Only works for the
       // known super-admin email and only while no account exists for it.
