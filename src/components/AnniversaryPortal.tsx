@@ -4924,7 +4924,6 @@ function AdminDashboardModal({
             </div>
 
             </div>
-            </div>
 
             {/* Modal Footer */}
             <div className={`p-6 border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
