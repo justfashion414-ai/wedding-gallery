@@ -166,6 +166,9 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
   const fileName = (file as File).name || (file.type?.startsWith('video/') ? 'upload.mp4' : 'upload.jpg');
   const isVideo = Boolean(file.type && file.type.startsWith('video/')) || /\.(mp4|mov|webm|mkv)$/i.test(fileName);
 
+  // Attach the caller's Firebase ID token so the signature endpoint can verify them.
+  const idToken = await auth?.currentUser?.getIdToken().catch(() => null);
+
   console.log(`Starting upload to Cloudinary: ${file.size} bytes (${fileName}) to folder ${folder}`);
 
   // Strategy 1: Direct signed upload to Cloudinary API (works on both Express /api/upload-signature and Netlify /.netlify/functions/upload-signature)
@@ -179,7 +182,10 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
       const sigRes = await fetch(sigEndpoint, {
         method: 'GET',
         credentials: 'include',
-        headers: { 'Accept': 'application/json' }
+        headers: {
+          'Accept': 'application/json',
+          ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
+        }
       });
 
       if (sigRes.ok) {
@@ -230,7 +236,8 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
     method: 'POST',
     credentials: 'include',
     headers: {
-      'Accept': 'application/json'
+      'Accept': 'application/json',
+      ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
     },
     body: formData
   });
@@ -239,7 +246,8 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
     res = await fetch('/.netlify/functions/upload', {
       method: 'POST',
       headers: {
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
       },
       body: formData
     });
@@ -3749,35 +3757,6 @@ function AdminDashboardModal({
                                   View Legacy Site
                                 </button>
                               )}
-                            </div>
-
-                            <div className="mt-3">
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  try {
-                                    const res = await fetch('/api/download-env');
-                                    if (!res.ok) throw new Error('Failed to fetch env file');
-                                    const text = await res.text();
-                                    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-                                    const url = window.URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = '.env';
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    document.body.removeChild(a);
-                                    window.URL.revokeObjectURL(url);
-                                    showToast('Downloaded .env file!');
-                                  } catch {
-                                    showToast('Could not download .env file.', 'error');
-                                  }
-                                }}
-                                className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#C9A24B] text-[#14262D] text-xs font-black uppercase tracking-widest hover:opacity-95 transition-all shadow-sm"
-                              >
-                                <Download className="w-4 h-4" />
-                                Download Netlify .env File
-                              </button>
                             </div>
                           </div>
 

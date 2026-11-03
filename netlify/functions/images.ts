@@ -1,4 +1,5 @@
 import customImagesData from '../../src/custom-images.json';
+import { verifyFirebaseIdToken, isVerifiedUser, getProjectId, unauthorized, notVerified } from './_verify';
 
 let memoryImages: Record<string, string> = { ...(customImagesData as Record<string, string>) };
 
@@ -23,6 +24,14 @@ export const handler = async (event: any) => {
   }
 
   if (event.httpMethod === 'POST') {
+    // Auth gate: writes require a signed-in, verified guest (or admin).
+    const caller = await verifyFirebaseIdToken(
+      event.headers?.authorization || event.headers?.Authorization,
+      getProjectId()
+    );
+    if (!caller) return unauthorized(headers);
+    if (!(await isVerifiedUser(caller.uid, getProjectId()))) return notVerified(headers);
+
     try {
       const body = JSON.parse(event.body || '{}');
       const { key, base64 } = body;
