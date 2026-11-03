@@ -208,3 +208,8 @@
 .animate-scroll-vertical-reverse {
   animation: scroll-vertical-reverse 50s linear infinite;
 }
+
+/* Netlify injects a fixed deploy badge on preview deploys; hide it */
+[data-netlify-deploy-id] {
+  display: none !important;
+}

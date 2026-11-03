@@ -170,6 +170,16 @@ const JOURNEY_DATES: string[] = EVENTS_DATA.map((e) =>
   new Date(`${e.date}T${e.time || '12:00'}:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
 );
 
+// Local placeholder photos used until real ones are uploaded (hero + footer grid)
+const PLACEHOLDER_IMAGES = [
+  '/placeholder-1.svg',
+  '/placeholder-2.svg',
+  '/placeholder-3.svg',
+  '/placeholder-4.svg',
+  '/placeholder-5.svg',
+  '/placeholder-6.svg',
+];
+
 const normalizeCode = (v: string) => v.trim().toUpperCase();
 
 // Helper to convert small image files to compressed data URLs if cloud upload is unavailable
@@ -1362,6 +1372,63 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   Open the feed
                 </button>
               </section>
+
+              {/* GIANT FOOTER WITH INTERACTIVE PHOTO GRID (placeholders until photos arrive) */}
+              <section className="relative overflow-hidden w-screen left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-[700px] sm:min-h-[850px] flex items-center justify-center bg-[#EEEDF3] dark:bg-[#0B171C] mt-12">
+                <div className="absolute inset-0 z-0 grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 auto-rows-fr opacity-60">
+                  <GridScanner isDarkMode={isDarkMode} />
+                </div>
+
+                <motion.div
+                  initial="initial"
+                  whileInView="animate"
+                  viewport={{ once: false, amount: 0.4 }}
+                  className="relative z-10 flex flex-col items-center max-w-full px-4 text-center pointer-events-none"
+                >
+                  <motion.div
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    whileInView={{ scale: 1, opacity: 1 }}
+                    transition={{ duration: 0.8, ease: "circOut" }}
+                  >
+                    <h2 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase mb-0 text-[#0E6B75] drop-shadow-sm">
+                      Dara
+                    </h2>
+                    <h2 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase flex items-center justify-center gap-[0.05em] text-[#0E6B75] drop-shadow-sm">
+                      <span>&amp; Femi</span>
+                      <motion.div
+                        animate={{ scale: [1, 1.2, 1], rotate: [0, 12, 0] }}
+                        transition={{ repeat: Infinity, duration: 4 }}
+                        className="w-[0.3em] h-[0.3em] rounded-full bg-[#C8932A] opacity-80"
+                      />
+                    </h2>
+                  </motion.div>
+
+                  <motion.div
+                    initial={{ opacity: 0, width: 0 }}
+                    whileInView={{ opacity: 1, width: '100%' }}
+                    transition={{ delay: 0.4, duration: 1 }}
+                    className="flex items-center gap-4 mt-12 w-full max-w-md mx-auto"
+                  >
+                    <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
+                    <p className="text-[clamp(0.8rem,3vw,1.5rem)] font-display font-black tracking-[0.4em] uppercase whitespace-nowrap opacity-60 text-[#0E6B75]">
+                      12.12.2026, Lagos
+                    </p>
+                    <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
+                  </motion.div>
+                </motion.div>
+              </section>
+
+              <footer className="py-10 text-center border-t border-[#DAD8E3] dark:border-[#22363E] mt-12 bg-white/50 dark:bg-black/20 backdrop-blur-sm rounded-[32px] mx-4">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="flex flex-col items-center">
+                    <h4 className="text-[1.1rem] font-serif-display italic text-[#0E6B75] mb-1">Dara &amp; Femi</h4>
+                    <p className={`text-xs ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Happy Wedding · 12 December 2026</p>
+                  </div>
+                  <div className="pt-2 opacity-40">
+                    <p className="text-[0.65rem] font-bold uppercase tracking-widest">Wedding memories, kept for life</p>
+                  </div>
+                </div>
+              </footer>
 
             </motion.div>
           )}
@@ -3061,6 +3128,77 @@ function ReelCard({
   );
 }
 
+function GridScanner({ isDarkMode }: { isDarkMode: boolean }) {
+  const [activeRow, setActiveRow] = useState(0);
+  const [direction, setDirection] = useState(1);
+  const rowCount = 10;
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setActiveRow(prev => {
+        let next = prev + direction;
+        if (next >= rowCount - 1) {
+          setDirection(-1);
+          return rowCount - 1;
+        }
+        if (next <= 0) {
+          setDirection(1);
+          return 0;
+        }
+        return next;
+      });
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [direction, rowCount]);
+
+  return (
+    <>
+      {Array.from({ length: 80 }).map((_, i) => {
+        const colCount = 10;
+        const rowIdx = Math.floor(i / colCount);
+        const isCurrentlyScanning = rowIdx === activeRow;
+        return (
+          <GridImage
+            key={i}
+            index={i}
+            isDarkMode={isDarkMode}
+            isCleared={isCurrentlyScanning}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+function GridImage({ index, isDarkMode, isCleared: autoCleared }: any) {
+  const [manualCleared, setManualCleared] = useState(false);
+  const isCleared = autoCleared || manualCleared;
+  const imgSrc = PLACEHOLDER_IMAGES[index % PLACEHOLDER_IMAGES.length];
+
+  return (
+    <div
+      className="relative w-full aspect-square cursor-pointer group pointer-events-auto"
+      onClick={() => setManualCleared(!manualCleared)}
+    >
+      <motion.img
+        src={imgSrc}
+        animate={{
+          filter: isCleared ? 'grayscale(0%) brightness(1.1)' : 'grayscale(100%) brightness(0.8)',
+          scale: isCleared ? 1.05 : 1
+        }}
+        className="w-full h-full object-cover transition-all duration-700"
+        alt=""
+      />
+      <motion.div
+        initial={{ opacity: 1 }}
+        animate={{ opacity: isCleared ? 0 : 1 }}
+        transition={{ duration: 0.4 }}
+        className={`absolute inset-0 ${isDarkMode ? 'bg-[#0B171C]/70' : 'bg-[#EEEDF3]/70'}`}
+      />
+    </div>
+  );
+}
+
 function DeleteConfirmationModal({ isOpen, onClose, onConfirm, isDarkMode }: any) {
   return (
     <AnimatePresence>
@@ -4013,7 +4151,8 @@ function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, imag
     { left: "54%", width: "clamp(135px, 38vw, 200px)", rotate: 5 },
   ];
 
-  const cappedImages = images.slice(0, 14);
+  const baseImages = images.length > 0 ? images : PLACEHOLDER_IMAGES;
+  const cappedImages = Array.from({ length: 14 }, (_, i) => baseImages[i % baseImages.length]);
   const totalPairs = Math.max(1, Math.ceil(cappedImages.length / 2));
 
   return (
