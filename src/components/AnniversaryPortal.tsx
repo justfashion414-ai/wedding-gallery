@@ -4349,7 +4349,7 @@ function AdminDashboardModal({
                       </div>
                       <p className="text-[0.75rem] opacity-60 italic">Upload up to 24 images for the giant footer photo grid (tapping a tile opens it full-screen).</p>
                     </div>
-                  )}}
+                  )}
                   </div>
                 </div>
               )}
