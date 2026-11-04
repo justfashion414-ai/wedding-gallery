@@ -370,6 +370,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [footerLightbox, setFooterLightbox] = useState<string | null>(null);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [newPostText, setNewPostText] = useState('');
+  const [newPostEvent, setNewPostEvent] = useState<string>('');
   const [accessCode, setAccessCode] = useState('');
   const [attachedMedia, setAttachedMedia] = useState<{url: string, id: string, type?: 'image' | 'video', orientation?: 'portrait' | 'landscape'}[]>([]);
 
@@ -1105,6 +1106,43 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }
   };
 
+  const approvePost = async (postId: string) => {
+    try {
+      await updateDoc(doc(db, 'posts', postId), { pending: false });
+      showToast('Approved. Guests can now see it', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Could not approve the post.', 'error');
+    }
+  };
+
+  const sharePost = async (p: any) => {
+    const url = `${window.location.origin}${window.location.pathname}?post=${p.id}`;
+    const title = p.text || p.caption || 'A memory from Dara & Femi';
+    if (typeof navigator !== 'undefined' && (navigator as any).share) {
+      try { await (navigator as any).share({ title: 'Dara & Femi', text: title, url }); return; } catch { return; }
+    }
+    setSharingPost(p);
+  };
+
+  const toggleVendorRequest = async () => {
+    if (!user) { showToast('Sign in first.', 'error'); return; }
+    try {
+      if ((vendors || []).includes(user.uid)) { showToast('You are already an official vendor.'); return; }
+      const myRes = residents.find((r: any) => r.uid === user.uid);
+      if (myRes?.vendorRequest?.status === 'pending') {
+        await setDoc(doc(db, 'residents', user.uid), { vendorRequest: { status: 'none', decidedAt: serverTimestamp() } }, { merge: true });
+        showToast('Request withdrawn.');
+      } else {
+        await setDoc(doc(db, 'residents', user.uid), { vendorRequest: { status: 'pending', requestedAt: serverTimestamp() } }, { merge: true });
+        showToast('Request sent. Dara and Femi will review it.');
+      }
+    } catch (err) {
+      console.error('vendor request failed', err);
+      showToast('Could not send the request.', 'error');
+    }
+  };
+
   const deleteAllGuestData = async () => {
     if (!isAdmin || !adminPermissions?.canDeletePosts) { showToast('You do not have permission to delete posts.', 'error'); return; }
     try {
@@ -1583,6 +1621,17 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </button>
               </div>
 
+              {!isAdmin && !(displayName.trim() !== '' && avatar && !avatar.startsWith('blob:')) && (
+                <div className={`rounded-[20px] p-[18px] mt-4 border flex items-center gap-3 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                  <div className="w-10 h-10 rounded-full bg-[#C8932A]/20 text-[#C8932A] grid place-items-center shrink-0"><User className="w-5 h-5" /></div>
+                  <div className="flex-1 min-w-0">
+                    <b className="block text-[0.95rem]">Complete your profile</b>
+                    <small className={`block text-[0.85rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Add your name and photo so the couple knows who you are.</small>
+                  </div>
+                  <button onClick={() => setActiveTab('settings')} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest shrink-0">Set up</button>
+                </div>
+              )}
+
               {/* OUR STORY */}
               <section className="mt-8">
                 <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Our story</h2>
@@ -1795,6 +1844,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   {(() => {
                     const regularPosts = posts.filter((p) => {
                       if (p.id === 'jubilee_documentary') return false;
+                      if (p.pending && !(isAdmin || p.authorUid === user?.uid)) return false;
                       const media: string[] = p.mediaUrls || (p.mediaUrl ? [p.mediaUrl] : []);
                       const hasVideo = media.some((u, idx) =>
                         p.mediaTypes?.[idx] === 'video' ||
@@ -1858,12 +1908,15 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           onDelete={() => setPostToDelete(p.id)}
                           onLike={() => handleToggleReaction(p.id, 'like')}
                           onLove={() => handleToggleReaction(p.id, 'love')}
-                          onShare={() => setSharingPost(p)}
+                          onShare={() => sharePost(p)}
                           onOpenMedia={(mIdx: number) => setActiveMediaIndex({ postId: p.id, index: mIdx })}
                           onComment={() => setCommentsPost(p)}
                           commentCount={p.commentCount || 0}
                           eventName={p.eventName || ''}
                           authorRole={postRole(p)}
+                          authorUid={p.authorUid}
+                          pending={p.pending}
+                          onApprove={() => approvePost(p.id)}
                         />
                       );
 
@@ -1889,6 +1942,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   reels={(() => {
                     const filteredReels = posts.filter((p) => {
                       if (p.id === 'jubilee_documentary') return false;
+                      if (p.pending && !(isAdmin || p.authorUid === user?.uid)) return false;
                       const media: string[] = p.mediaUrls || (p.mediaUrl ? [p.mediaUrl] : []);
                       const hasVideo = media.some((u, idx) =>
                         p.mediaTypes?.[idx] === 'video' ||
@@ -1938,7 +1992,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   onDelete={(id: string) => setPostToDelete(id)}
                   onLike={(id: string) => handleToggleReaction(id, 'like')}
                   onLove={(id: string) => handleToggleReaction(id, 'love')}
-                  onShare={(p: any) => setSharingPost(p)}
+                  onShare={(p: any) => sharePost(p)}
                   onComment={(p: any) => setCommentsPost(p)}
                 />
               )}
@@ -2025,6 +2079,17 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </div>
               </div>
 
+              <div className={`p-[14px_18px] flex items-center justify-between gap-4 rounded-[20px] border mb-[30px] ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                <div className="min-w-0">
+                  <strong className="block text-[1rem]">I'm an official vendor</strong>
+                  <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+                    {(vendors || []).includes(user?.uid) ? 'You post as an official vendor. Thank you!' : ((residents.find((r: any) => r.uid === user?.uid)?.vendorRequest?.status === 'pending') ? 'Waiting for the couple to approve.' : 'Photographer, videographer or planner? Ask to post officially.')}
+                  </small>
+                </div>
+                <button type="button" aria-label="Vendor request" onClick={toggleVendorRequest} disabled={!!user && (vendors || []).includes(user.uid)} className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-60 ${((!!user && (vendors || []).includes(user.uid)) || (residents.find((r: any) => r.uid === user?.uid)?.vendorRequest?.status === 'pending')) ? 'bg-[#0E6B75]' : 'bg-black/20 dark:bg-white/20'}`}>
+                  <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all ${(((!!user && (vendors || []).includes(user.uid))) || (residents.find((r: any) => r.uid === user?.uid)?.vendorRequest?.status === 'pending')) ? 'left-6' : 'left-1'}`} />
+                </button>
+              </div>
               <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[14px_4px_12px] leading-[1.25]">Appearance</h2>
               <div className={`p-[4px_0] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                 <div className="p-[14px_18px] flex items-center justify-between gap-4">
@@ -2269,12 +2334,31 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </button>
               </div>
 
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-9 h-9 rounded-full overflow-hidden bg-[#0E6B75] flex items-center justify-center text-white font-bold shrink-0">
+                  {avatar && !avatar.startsWith('blob:') ? <img src={avatar} className="w-full h-full object-cover" alt="" /> : <span>{(displayName || 'G').charAt(0).toUpperCase()}</span>}
+                </div>
+                <div className="min-w-0">
+                  <b className="block text-[0.9rem] truncate">{displayName || 'Guest'}</b>
+                  <small className="block opacity-50 text-[0.75rem]">{(vendors || []).includes(user?.uid) ? 'Official vendor' : 'Guest'}</small>
+                </div>
+              </div>
+
               <textarea 
                 placeholder="What's happening at the celebration?"
                 value={newPostText}
                 onChange={(e) => setNewPostText(e.target.value)}
                 className={`w-full min-h-[140px] p-4 rounded-2xl border-none outline-none resize-none text-[1.05rem] font-medium transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
               />
+
+              <div className="mt-4">
+                <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-2">Which part of the celebration is this?</span>
+                <div className="flex flex-wrap gap-2">
+                  {EVENTS.map((e) => (
+                    <button key={e.id} type="button" onClick={() => setNewPostEvent(newPostEvent === e.id ? '' : e.id)} className={`px-4 py-2 rounded-full text-[0.8rem] font-bold border transition-all ${newPostEvent === e.id ? 'bg-[#0E6B75] text-white border-[#0E6B75]' : (isDarkMode ? 'border-[#22363E] text-[#93A4AB]' : 'border-[#DAD8E3] text-[#5A6970]')}`}>{e.name}</button>
+                  ))}
+                </div>
+              </div>
 
               <div className="mt-4">
                 <input 
@@ -2385,7 +2469,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </div>
                 
                 <button 
-                  disabled={(!newPostText.trim() && attachedMedia.length === 0) || !accessCode.trim() || isPosting || !configLoaded || !activeAccessCode}
+                  disabled={(!newPostText.trim() && attachedMedia.length === 0) || !accessCode.trim() || !newPostEvent || isPosting || !configLoaded || !activeAccessCode}
                   onClick={async () => {
                     if (archiveMode) { showToast('This wedding is archived. New posts are turned off.', 'error'); return; }
                     if (normalizeCode(accessCode) === normalizeCode(activeAccessCode ?? '')) {
@@ -2434,6 +2518,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           mediaUrls: finalMediaUrls,
                           mediaTypes: finalMediaTypes,
                           ...(postVideoOrientation ? { videoOrientation: postVideoOrientation } : {}),
+                          ...(newPostEvent ? { eventId: newPostEvent } : {}),
                           pending: approveGuestPosts && !(vendors || []).includes(user.uid) && !isAdmin,
                           likeCount: 0,
                           loveCount: 0,
@@ -2443,6 +2528,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                         setIsComposeOpen(false);
                         setNewPostText('');
                         setAccessCode('');
+                        setNewPostEvent('');
                         setAttachedMedia([]);
                         if (postVideoOrientation === 'portrait' && finalMediaUrls.length === 1) {
                           setFeedSubTab('reels');
@@ -2759,7 +2845,7 @@ function ShareSheet({ post, isDarkMode, onClose, showToast }: any) {
       color: 'bg-[#0E6B75]', 
       action: () => {
         navigator.clipboard.writeText(shareUrl);
-        if (showToast) showToast('Link copied to clipboard!');
+        if (showToast) showToast('Link copied');
       }
     },
     { 
@@ -2941,7 +3027,10 @@ function Post({
   onComment,
   commentCount = 0,
   eventName,
-  authorRole
+  authorRole,
+  authorUid,
+  pending,
+  onApprove
 }: any) {
   const [localLiked, setLocalLiked] = useState(false);
   const [localLoved, setLocalLoved] = useState(false);
@@ -2981,6 +3070,7 @@ function Post({
             <strong className="text-[1rem] leading-tight">{name}</strong>
             {authorRole === 'vendor' && (<span className="ml-1 inline-block align-middle text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-[#21122B]">Official</span>)}
             {authorRole === 'couple' && (<span className="ml-1 inline-block align-middle text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#0E6B75] text-white">Couple</span>)}
+            {pending && (<span className="ml-1 inline-block align-middle text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-white">Awaiting approval</span>)}
             <span className="text-[0.8rem] text-[#5A6970] dark:text-[#93A4AB] flex items-center gap-1">
               <span aria-hidden="true">·</span>
               <span>{time}</span>
@@ -2991,17 +3081,43 @@ function Post({
           )}
           <div className="contents">
           </div>
-          {isAdmin && (
+          {pending && isAdmin && (
+            <button
+              onClick={onApprove}
+              className="p-1.5 text-[#1F8A5B] hover:bg-[#1F8A5B]/10 rounded-lg transition-colors"
+              title="Approve post"
+            >
+              <Check className="w-4 h-4" />
+            </button>
+          )}
+          {(isAdmin || (user && user.uid === authorUid)) && (
             <button 
               onClick={onDelete}
               className="p-1.5 text-red-500/60 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
-              title="Delete post"
+              title={isAdmin ? 'Delete post' : 'Remove your post'}
             >
               <Trash2 className="w-4 h-4" />
             </button>
           )}
         </div>
         {text && (
+          (!mediaUrls || mediaUrls.length === 0) ? (
+            <div className="m-[10px_0_2px] rounded-2xl bg-[#0E6B75]/[0.06] dark:bg-[#0E6B75]/15 p-[18px] relative">
+              <span aria-hidden="true" className="absolute -top-2 left-4 font-serif-display text-5xl text-[#0E6B75]/25 select-none leading-none">&ldquo;</span>
+              <p className="font-serif-display italic text-[1.08rem] leading-relaxed whitespace-pre-wrap m-0">
+                {displayedText}
+              </p>
+              {isLongText && (
+                <button
+                  type="button"
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="mt-1 text-[0.9rem] font-extrabold text-[#0E6B75] dark:text-[#4FC3CF] hover:underline focus:outline-none inline-flex items-center"
+                >
+                  {isExpanded ? 'See less' : 'See more'}
+                </button>
+              )}
+            </div>
+          ) : (
           <div className="m-[4px_0_0]">
             <p className="text-[1rem] leading-normal whitespace-pre-wrap inline">
               {displayedText}
@@ -3016,6 +3132,7 @@ function Post({
               </button>
             )}
           </div>
+          )
         )}
         
         {mediaUrls && mediaUrls.length > 0 && (
