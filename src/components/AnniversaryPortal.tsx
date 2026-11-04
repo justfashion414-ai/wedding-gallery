@@ -348,7 +348,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [newPostText, setNewPostText] = useState('');
   const [accessCode, setAccessCode] = useState('');
   const [attachedMedia, setAttachedMedia] = useState<{url: string, id: string, type?: 'image' | 'video', orientation?: 'portrait' | 'landscape'}[]>([]);
-  const [showProfilePrompt, setShowProfilePrompt] = useState(false);
 
   // Email/password admin auth state
   const [authScreen, setAuthScreen] = useState<null | 'signin' | 'forgot' | 'sent'>(null);
@@ -639,9 +638,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         const data = snap.data();
         if (data.displayName) setDisplayName(data.displayName);
         if (data.photoUrl) setAvatar(data.photoUrl);
-        setShowProfilePrompt(!data.displayName || !data.photoUrl);
       } else {
-        setShowProfilePrompt(true);
       }
     }, (err) => {
       handleFirestoreError(err, OperationType.GET, `residents/${user.uid}`);
@@ -1310,21 +1307,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   Femi
                 </h2>
                 <p className="text-center text-[0.95rem] opacity-[0.85] mt-4 mb-0 max-w-[34ch] mx-auto leading-snug">are getting married. Share every moment with us, from the first introduction to the last dance.</p>
-
-                {showProfilePrompt && !isAdmin && (
-                  <div className="mt-5 bg-white/10 border border-white/20 rounded-[20px] p-4 flex items-center justify-between gap-4 backdrop-blur-md">
-                    <div className="flex-1">
-                      <b className="text-[0.95rem] font-display block mb-0.5">Complete your profile</b>
-                      <p className="text-[0.8rem] opacity-80 m-0 leading-tight">Add your name and photo so the couple knows who is sharing.</p>
-                    </div>
-                    <button
-                      onClick={() => setActiveTab('settings')}
-                      className="whitespace-nowrap px-4 py-2 bg-white text-[#0B3A41] rounded-full text-[0.75rem] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-all"
-                    >
-                      Set Up
-                    </button>
-                  </div>
-                )}
 
                 {phase === 'before' && (
                   <div className="mt-5 mx-auto flex items-stretch justify-center bg-white/10 border border-white/25 rounded-[18px] py-3.5 backdrop-blur-md divide-x divide-white/25">
@@ -4923,35 +4905,33 @@ function AdminDashboardModal({
 }
 
 interface FloatingPhotoCardProps {
-  src: string;
-  left: string;
-  width: string;
-  initialRotate: number;
-  groupIndex: number;
-  totalGroups: number;
-  staggerPx: number;
-  caption?: string;
+  images: string[];
+  imgOffset: number;
+  slot: number;
+  column: number;
+  paused: boolean;
+  onPauseDelta: (delta: number) => void;
   constraintsRef: React.RefObject<HTMLDivElement | null>;
 }
 
-const GROUP_TRAVERSE_SECONDS = 11; // Time for one group of four images to traverse the hero banner
+// Hero runs as a 2x2 grid: two cards in the upper half, two in the lower half, at all times.
+// Each column is a conveyor of four slots spaced half a screen apart; as the top card of a
+// column clears the banner it wraps to the bottom, so the grid never empties.
+const HERO_TRAVERSE_SECONDS = 11; // Time for one card to travel one screen height
 
-const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width, initialRotate, groupIndex, totalGroups, staggerPx, caption, constraintsRef }) => {
+const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset, slot, column, paused, onPauseDelta, constraintsRef }) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
   const y = useMotionValue(1000);
   const isHovered = useRef(false);
   const isDragging = useRef(false);
   const isTouching = useRef(false);
-  const [isPausedState, setIsPausedState] = useState(false);
   const initialized = useRef(false);
   const pxPerSecond = useRef(0);
+  const [imgIdx, setImgIdx] = useState(slot + imgOffset);
   const prefersReducedMotion = typeof window !== 'undefined' ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
 
-  const updatePausedState = () => {
-    const paused = isHovered.current || isDragging.current || isTouching.current;
-    setIsPausedState(paused);
-  };
+  const anyPaused = () => isHovered.current || isDragging.current || isTouching.current;
 
   useAnimationFrame((_, delta) => {
     if (!constraintsRef.current || !cardRef.current) return;
@@ -4959,38 +4939,40 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
     const containerHeight = constraintsRef.current.offsetHeight;
     const cardHeight = cardRef.current.offsetHeight || 220;
     const margin = 60;
-    // Sequential groups: the next group of 4 only enters once the current group has
-    // fully cleared the top of the hero banner.
-    const groupSpacing = containerHeight + cardHeight + margin;
-    const totalCycleLength = Math.max(containerHeight + cardHeight + margin, groupSpacing * Math.max(1, totalGroups));
+    const halfStep = containerHeight / 2;
+    const cycleLength = halfStep * 4;
 
     if (containerHeight === 0) return;
 
     if (!initialized.current) {
-      pxPerSecond.current = (containerHeight + cardHeight) / GROUP_TRAVERSE_SECONDS;
-      // Start group 0 inside the lower half of the viewport while subsequent groups follow at groupSpacing intervals
-      const startPos = (containerHeight * 0.65) + (groupIndex * groupSpacing) + staggerPx;
-      y.set(startPos);
+      pxPerSecond.current = (containerHeight + cardHeight) / HERO_TRAVERSE_SECONDS;
+      // Slot 0 sits in the upper half, slot 1 in the lower half; slots 2 and 3 wait below the fold
+      y.set(containerHeight * 0.12 + slot * halfStep);
       initialized.current = true;
     }
 
     const dt = Math.min(delta, 100) / 1000;
-    
+
     let speedMultiplier = 1.0;
-    if (isHovered.current || isDragging.current || isTouching.current) speedMultiplier = 0.15;
     if (prefersReducedMotion) speedMultiplier *= 0.05;
-    
+    if (paused) speedMultiplier = 0;
+
     let nextY = y.get() - (pxPerSecond.current * dt * speedMultiplier);
-    
+
     if (nextY < -(cardHeight + margin)) {
-      nextY += totalCycleLength;
-      x.set(0); 
+      nextY += cycleLength;
+      x.set(0);
+      setImgIdx((prev) => (prev + 4) % Math.max(1, images.length));
     }
-    
+
     if (!isDragging.current) {
       y.set(nextY);
     }
   });
+
+  const currentImage = images.length > 0 ? images[imgIdx % images.length] : PLACEHOLDER_IMAGES[imgIdx % PLACEHOLDER_IMAGES.length];
+  const caption = EVENTS_DATA.length > 0 ? EVENTS_DATA[(imgIdx + imgOffset) % EVENTS_DATA.length].name : undefined;
+  const isPausedState = isHovered.current || isDragging.current || isTouching.current;
 
   return (
     <motion.div
@@ -4999,27 +4981,27 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
       dragMomentum={false}
       dragElastic={0}
       dragConstraints={constraintsRef}
-      onDragStart={() => { isDragging.current = true; updatePausedState(); }}
-      onDragEnd={() => { isDragging.current = false; updatePausedState(); }}
+      onDragStart={() => { isDragging.current = true; onPauseDelta(1); }}
+      onDragEnd={() => { isDragging.current = false; if (!anyPaused()) onPauseDelta(-1); }}
       onPointerEnter={(e) => {
         if (e.pointerType === 'mouse') {
           isHovered.current = true;
-          updatePausedState();
+          onPauseDelta(1);
         }
       }}
       onPointerLeave={(e) => {
         if (e.pointerType === 'mouse') {
           isHovered.current = false;
-          updatePausedState();
+          if (!anyPaused()) onPauseDelta(-1);
         }
       }}
-      onPointerDown={() => { isTouching.current = true; updatePausedState(); }}
-      onPointerUp={() => { isTouching.current = false; updatePausedState(); }}
-      onPointerCancel={() => { isTouching.current = false; updatePausedState(); }}
-      initial={{ rotate: initialRotate }}
-      style={{ 
-        left, 
-        width, 
+      onPointerDown={() => { isTouching.current = true; onPauseDelta(1); }}
+      onPointerUp={() => { isTouching.current = false; if (!anyPaused()) onPauseDelta(-1); }}
+      onPointerCancel={() => { isTouching.current = false; if (!anyPaused()) onPauseDelta(-1); }}
+      initial={{ rotate: column === 0 ? (slot % 2 === 0 ? -4 : 3) : (slot % 2 === 0 ? 3 : -4) }}
+      style={{
+        left: column === 0 ? '6%' : '54%',
+        width: 'clamp(150px, 42vw, 280px)',
         position: 'absolute',
         x,
         y,
@@ -5030,10 +5012,10 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
       whileHover={{ scale: 1.05, zIndex: 110 }}
     >
       <div className={`bg-white p-2 pb-2 shadow-2xl rounded-sm ${isPausedState ? 'scale-110 shadow-black/40' : 'shadow-black/20'}`}>
-        <img 
-          src={src} 
-          className="w-full h-auto object-cover pointer-events-none" 
-          alt="" 
+        <img
+          src={currentImage}
+          className="w-full h-auto object-cover pointer-events-none"
+          alt=""
           draggable={false}
         />
         {caption && (
@@ -5046,61 +5028,40 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
 
 function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, images: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  
-  // 14 slot configurations grouped into fours so 4 images scroll together at a time
-  const laneConfigs = [
-    // Group 1
-    { left: "2%", width: "clamp(88px, 21vw, 160px)", rotate: -6 },
-    { left: "27%", width: "clamp(88px, 21vw, 160px)", rotate: 4 },
-    { left: "52%", width: "clamp(88px, 21vw, 160px)", rotate: -4 },
-    { left: "77%", width: "clamp(88px, 21vw, 160px)", rotate: 6 },
-    // Group 2
-    { left: "4%", width: "clamp(88px, 21vw, 160px)", rotate: 5 },
-    { left: "29%", width: "clamp(88px, 21vw, 160px)", rotate: -5 },
-    { left: "54%", width: "clamp(88px, 21vw, 160px)", rotate: 4 },
-    { left: "79%", width: "clamp(88px, 21vw, 160px)", rotate: -6 },
-    // Group 3
-    { left: "3%", width: "clamp(88px, 21vw, 160px)", rotate: -4 },
-    { left: "28%", width: "clamp(88px, 21vw, 160px)", rotate: 6 },
-    { left: "53%", width: "clamp(88px, 21vw, 160px)", rotate: -5 },
-    { left: "78%", width: "clamp(88px, 21vw, 160px)", rotate: 5 },
-    // Group 4 (slots 13-14)
-    { left: "5%", width: "clamp(88px, 21vw, 160px)", rotate: 4 },
-    { left: "30%", width: "clamp(88px, 21vw, 160px)", rotate: -4 },
-  ];
+  const pauseCount = useRef(0);
+  const [heroPaused, setHeroPaused] = useState(false);
+
+  const handlePauseDelta = (delta: number) => {
+    pauseCount.current = Math.max(0, pauseCount.current + delta);
+    setHeroPaused(pauseCount.current > 0);
+  };
 
   const baseImages = images.length > 0 ? images : PLACEHOLDER_IMAGES;
-  const cappedImages = Array.from({ length: 14 }, (_, i) => baseImages[i % baseImages.length]);
-  const totalGroups = Math.max(1, Math.ceil(cappedImages.length / 4));
 
   return (
-    <section 
+    <section
       ref={containerRef}
       className="relative w-screen left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] h-[65vh] sm:h-[80vh] overflow-hidden bg-[#0E6B75] mb-12 shadow-inner"
     >
       <div className="absolute inset-0 opacity-20 pointer-events-none">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.2),transparent)]" />
       </div>
-      
+
       <div className="absolute inset-0 overflow-hidden">
-        {cappedImages.map((src, i) => {
-          const config = laneConfigs[i % laneConfigs.length];
-          const groupIndex = Math.floor(i / 4);
-          return (
-            <FloatingPhotoCard 
-              key={`${cappedImages.length}-${i}-${src}`} 
-              src={src} 
-              left={config.left} 
-              width={config.width} 
-              initialRotate={config.rotate} 
-              groupIndex={groupIndex}
-              totalGroups={totalGroups}
-              staggerPx={(i % 4) * 34}
-              caption={EVENTS_DATA[i % EVENTS_DATA.length].name}
+        {[0, 1].map((column) =>
+          [0, 1, 2, 3].map((slot) => (
+            <FloatingPhotoCard
+              key={`hero-${column}-${slot}`}
+              images={baseImages}
+              imgOffset={column * 2}
+              slot={slot}
+              column={column}
+              paused={heroPaused}
+              onPauseDelta={handlePauseDelta}
               constraintsRef={containerRef}
             />
-          );
-        })}
+          ))
+        )}
       </div>
     </section>
   );
