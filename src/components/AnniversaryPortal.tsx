@@ -4844,7 +4844,7 @@ function AdminDashboardModal({
                   <div className="grid grid-cols-2 gap-3">
                     <select value={postEventFilter} onChange={(e) => setPostEventFilter(e.target.value)} aria-label="Filter by event" className={`p-3 rounded-xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] text-white' : 'bg-white border-[#DAD8E3] text-[#14262D]'} font-bold text-sm`}>
                       <option value="all">All events</option>
-                      {EVENTS.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                      {(events || []).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
                     </select>
                     <select value={postTypeFilter} onChange={(e) => setPostTypeFilter(e.target.value)} aria-label="Filter by type" className={`p-3 rounded-xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] text-white' : 'bg-white border-[#DAD8E3] text-[#14262D]'} font-bold text-sm`}>
                       {['all', 'Photo', 'Video', 'Reel', 'Wish'].map((t) => <option key={t} value={t}>{t === 'all' ? 'All types' : t}</option>)}
@@ -4856,7 +4856,7 @@ function AdminDashboardModal({
                       if (filtered.length === 0) return <p className="p-5 opacity-50 text-sm">No posts match. Memories your guests share will show up here.</p>;
                       return filtered.map((p: any) => {
                         const t = postTypeOf(p);
-                        const evName = EVENTS.find((e) => e.id === p.eventId)?.name;
+                        const evName = (events || []).find((e) => e.id === p.eventId)?.name;
                         const when = p.timestamp?.toDate ? p.timestamp.toDate() : (p.createdAt?.toDate ? p.createdAt.toDate() : null);
                         const media = (p.mediaUrls || [])[0];
                         return (
