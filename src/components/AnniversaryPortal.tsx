@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useAnimationFrame, useMotionValue } from 'motion/react';
 import { 
   Home, 
+  Globe, 
   Plus, 
   Settings, 
   X, 
@@ -487,6 +488,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
   // Reopen the admin dashboard where it was left after a refresh
   const adminUiFirstRunRef = useRef(true);
+  const adminAutoOpenedRef = useRef(false);
   useEffect(() => {
     if (adminUiFirstRunRef.current) {
       adminUiFirstRunRef.current = false;
@@ -716,6 +718,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         setIsAdmin(true);
         setAdminPermissions(snap.data().permissions);
         setMustSetPassword(!!snap.data().mustSetPassword);
+        if (!adminAutoOpenedRef.current && !snap.data().mustSetPassword) { adminAutoOpenedRef.current = true; setIsAdminDashboardOpen(true); }
       } else if (isSuper) {
         setMustSetPassword(false);
         setIsAdmin(true);
@@ -724,9 +727,11 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           canUploadImages: true, 
           canSetAccessCode: true 
         });
+        if (!adminAutoOpenedRef.current) { adminAutoOpenedRef.current = true; setIsAdminDashboardOpen(true); }
       } else {
         setIsAdmin(false);
         setAdminPermissions(null);
+        adminAutoOpenedRef.current = false;
       }
     }, (err) => {
       handleFirestoreError(err, OperationType.GET, `admins/${user.email}`);
@@ -1494,11 +1499,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   <span>Install</span>
                 </button>
               )}
-              {isAdmin && (
-                <button onClick={() => setIsAdminDashboardOpen(true)} className="px-3 py-1.5 rounded-full bg-[#C8932A] text-[#0B3A41] text-[0.7rem] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-all">
-                  Couple view
-                </button>
-              )}
               <div className={`w-8 h-8 rounded-full overflow-hidden border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'} bg-[#0E6B75] flex items-center justify-center text-[0.65rem] text-white font-black`}>
                 {avatar ? <img src={avatar} className="w-full h-full object-cover" /> : <span>{displayName ? displayName[0].toUpperCase() : 'Y'}</span>}
               </div>
@@ -2167,40 +2167,11 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               </div>
 
               {isAdmin && (
-                <>
-                  <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Administration</h2>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[['Posts', posts.length], ['To approve', posts.filter((p: any) => p.pending).length], ['Vendors', (vendors || []).length]].map(([lbl, n]) => (
-                      <div key={lbl} className={`p-[12px_8px] rounded-[16px] border text-center ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                        <div className="text-[1.35rem] font-black font-display leading-none">{n as number}</div>
-                        <div className={`text-[0.7rem] font-black uppercase tracking-wider mt-1 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{lbl}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className={`mt-3 p-[4px_0] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                    <div className="p-[14px_18px]">
-                      <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Manage access code and settings</small>
-                    </div>
-                    <div className="p-[14px_18px] flex items-center justify-between gap-4 border-t border-[#DAD8E3] dark:border-[#22363E]">
-                      <strong className="block text-[1rem]">Active access code</strong>
-                      <span className="font-black tracking-[0.08em] text-[#0E6B75] text-[0.95rem]">{activeAccessCode || '\u2014'}</span>
-                    </div>
-                    {[['approve', 'Approve guest posts first', 'New guest posts stay hidden until you approve them. Vendors skip this.', approveGuestPosts, () => updateAppConfigFlags({ approveGuestPosts: !approveGuestPosts })], ['push', 'Push notifications on new posts', 'Get a notification when someone posts or comments.', pushEnabled, () => updateAppConfigFlags({ pushEnabled: !pushEnabled })]].map(([k, label, sub, on, fn]) => (
-                      <div key={k as string} className="p-[14px_18px] flex items-center justify-between gap-4 border-t border-[#DAD8E3] dark:border-[#22363E]">
-                        <div className="min-w-0">
-                          <strong className="block text-[1rem]">{label as string}</strong>
-                          <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{sub as string}</small>
-                        </div>
-                        <button type="button" aria-label={label as string} onClick={fn as any} className={`relative w-12 h-7 rounded-full transition-colors shrink-0 ${(on as boolean) ? 'bg-[#0E6B75]' : 'bg-black/20 dark:bg-white/20'}`}>
-                          <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all ${(on as boolean) ? 'left-6' : 'left-1'}`} />
-                        </button>
-                      </div>
-                    ))}
-                    <button onClick={() => setIsAdminDashboardOpen(true)} className="w-full border-t border-[#DAD8E3] dark:border-[#22363E] py-3.5 font-bold text-[0.9rem] text-[#0E6B75]">
-                      Open full management
-                    </button>
-                  </div>
-                </>
+                <div className="pt-6 pb-2">
+                  <button onClick={() => setIsAdminDashboardOpen(true)} className="w-full py-4 rounded-[16px] bg-[#0E6B75] text-white text-[0.75rem] font-black uppercase tracking-widest">
+                    Open admin dashboard
+                  </button>
+                </div>
               )}
             </motion.div>
           )}
@@ -3101,15 +3072,6 @@ function Post({
           )}
           <div className="contents">
           </div>
-          {pending && isAdmin && (
-            <button
-              onClick={onApprove}
-              className="p-1.5 text-[#1F8A5B] hover:bg-[#1F8A5B]/10 rounded-lg transition-colors"
-              title="Approve post"
-            >
-              <Check className="w-4 h-4" />
-            </button>
-          )}
           {(isAdmin || (user && user.uid === authorUid)) && (
             <button 
               onClick={onDelete}
@@ -3593,15 +3555,6 @@ function ReelCard({
           )}
         </div>
         <div className="flex items-center gap-2 pointer-events-auto">
-          {isAdmin && !reel.isAd && (
-            <button
-              onClick={onDelete}
-              className="p-2.5 rounded-full bg-black/50 text-red-400 hover:bg-red-500 hover:text-white backdrop-blur-md transition-colors"
-              title="Delete Reel"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          )}
           <button
             onClick={onToggleMute}
             className="p-2.5 rounded-full bg-black/50 text-white backdrop-blur-md hover:bg-black/70 transition-colors"
@@ -4293,7 +4246,8 @@ function AdminDashboardModal({
   const [activeAdminTab, setActiveAdminTab] = useState<string>(() => {
     try {
       const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null');
-      return storedAdminUi?.tab || 'overview';
+      const storedTab = storedAdminUi?.tab;
+      return storedTab && storedTab !== 'admins' ? storedTab : 'overview';
     } catch {
       return 'overview';
     }
@@ -4575,7 +4529,7 @@ function AdminDashboardModal({
                       <nav className="flex flex-col gap-1">
                         {[
                           { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper },
-                          { id: 'admins', label: 'Admins', icon: Users, show: isSuper },
+                          
                           { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions?.canDeletePosts },
                         ].filter((t) => t.show).map((tab) => (
                           <button
@@ -4590,6 +4544,10 @@ function AdminDashboardModal({
                           </button>
                         ))}
                       </nav>
+                      <button onClick={onClose} className="mt-6 pt-4 flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-white/60 hover:bg-white/10 hover:text-white text-left border-t border-white/10">
+                        <Globe className="w-[18px] h-[18px] shrink-0" />
+                        <span>View website</span>
+                      </button>
                     </div>
                   </div>
 
@@ -4639,7 +4597,7 @@ function AdminDashboardModal({
                 <nav className="flex flex-col gap-1">
                   {[
                     { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper },
-                    { id: 'admins', label: 'Admins', icon: Users, show: isSuper },
+                    
                     { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions?.canDeletePosts },
                   ].filter((t) => t.show).map((tab) => (
                     <button
@@ -4654,8 +4612,8 @@ function AdminDashboardModal({
                   ))}
                 </nav>
                 <button onClick={onClose} className="mt-auto pt-4 flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-white/60 hover:bg-white/10 hover:text-white text-left">
-                  <X className="w-[18px] h-[18px] shrink-0" />
-                  <span>Close dashboard</span>
+                  <Globe className="w-[18px] h-[18px] shrink-0" />
+                  <span>View website</span>
                 </button>
               </aside>
 
@@ -5139,25 +5097,6 @@ function AdminDashboardModal({
                     <p className="text-sm opacity-60 mt-0.5">People join without an account. This list shows everyone who has posted.</p>
                   </div>
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                    <h3 className="font-black font-display text-lg mb-1">Guest access code</h3>
-                    <p className="text-sm opacity-60 mb-4">Guests enter this once before their first post. Anyone can browse without it.</p>
-                    <div className="flex items-center gap-3 flex-wrap mb-4">
-                      <b className="font-display text-2xl tracking-[0.2em]">{activeCode}</b>
-                      <button type="button" onClick={() => { navigator.clipboard?.writeText(activeCode || ''); showToast('Access code copied'); }} className="px-4 py-2 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.65rem] font-black uppercase tracking-widest">Copy</button>
-                    </div>
-                    {adminPermissions?.canSetAccessCode && (
-                      <div>
-                        <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Set your own code</span>
-                        <div className="flex gap-2 flex-wrap">
-                          <input type="text" value={newCode} maxLength={20} onChange={(e) => { const val = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase(); setNewCode(val); setIsDirty(true); }} placeholder="E.G. DARAFEMI26" className={`${inputCls} flex-1 min-w-[200px] tracking-widest`} />
-                          <button onClick={async () => { await onUpdateCode(newCode); setIsDirty(false); }} disabled={!canSaveCode} className={`px-5 py-3 rounded-xl text-[0.7rem] font-black uppercase tracking-widest ${canSaveCode ? 'bg-[#0E6B75] text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>Save code</button>
-                          <button type="button" onClick={() => { const gen = Array.from({ length: 8 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 31)]).join(''); setNewCode(gen); onUpdateCode(gen); setIsDirty(false); }} className="px-5 py-3 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[0.7rem] font-black uppercase tracking-widest">Generate</button>
-                        </div>
-                        <p className="text-[0.7rem] opacity-50 mt-2">4 to 16 letters or numbers. Changing it stops the old code working.</p>
-                      </div>
-                    )}
-                  </div>
-                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <h3 className="font-black font-display text-lg mb-3">People who have posted</h3>
                     <div className="space-y-3">
                       {(() => {
@@ -5197,6 +5136,25 @@ function AdminDashboardModal({
 
               {activeAdminTab === 'settings' && (
                 <div className="space-y-8">
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-1">Guest access code</h3>
+                    <p className="text-sm opacity-60 mb-4">Guests enter this once before their first post. Anyone can browse without it.</p>
+                    <div className="flex items-center gap-3 flex-wrap mb-4">
+                      <b className="font-display text-2xl tracking-[0.2em]">{activeCode}</b>
+                      <button type="button" onClick={() => { navigator.clipboard?.writeText(activeCode || ''); showToast('Access code copied'); }} className="px-4 py-2 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.65rem] font-black uppercase tracking-widest">Copy</button>
+                    </div>
+                    {adminPermissions?.canSetAccessCode && (
+                      <div>
+                        <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Set your own code</span>
+                        <div className="flex gap-2 flex-wrap">
+                          <input type="text" value={newCode} maxLength={20} onChange={(e) => { const val = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase(); setNewCode(val); setIsDirty(true); }} placeholder="E.G. DARAFEMI26" className={`${inputCls} flex-1 min-w-[200px] tracking-widest`} />
+                          <button onClick={async () => { await onUpdateCode(newCode); setIsDirty(false); }} disabled={!canSaveCode} className={`px-5 py-3 rounded-xl text-[0.7rem] font-black uppercase tracking-widest ${canSaveCode ? 'bg-[#0E6B75] text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>Save code</button>
+                          <button type="button" onClick={() => { const gen = Array.from({ length: 8 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 31)]).join(''); setNewCode(gen); onUpdateCode(gen); setIsDirty(false); }} className="px-5 py-3 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[0.7rem] font-black uppercase tracking-widest">Generate</button>
+                        </div>
+                        <p className="text-[0.7rem] opacity-50 mt-2">4 to 16 letters or numbers. Changing it stops the old code working.</p>
+                      </div>
+                    )}
+                  </div>
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <h3 className="font-black font-display text-lg mb-4">Behaviour</h3>
                     <div className="space-y-4">
@@ -5244,6 +5202,60 @@ function AdminDashboardModal({
                       </div>
                     )}
                   </div>
+                  {isSuper && (
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-4">Administrators</h3>
+<div className="space-y-6">
+                  <div>
+                    <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Add New Admin (Gmail)</label>
+                    <div className="flex gap-2">
+                      <input 
+                        type="email"
+                        value={newAdminEmail}
+                        onChange={(e) => setNewAdminEmail(e.target.value)}
+                        placeholder="resident@gmail.com"
+                        className={`flex-1 p-4 rounded-xl border-none outline-none font-bold transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
+                      />
+                      <button 
+                        onClick={handleAddAdmin}
+                        className="px-6 bg-[#0E6B75] text-white rounded-xl hover:scale-105 active:scale-95 transition-all"
+                      >
+                        <Plus className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h4 className="text-[0.7rem] uppercase tracking-widest font-black opacity-50">Current Administrators</h4>
+                    {allAdmins.map((adm) => (
+                      <div key={adm.id} className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#F8F8FA] border-[#DAD8E3]'}`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="font-bold text-sm">{adm.email}</span>
+                          <button onClick={() => handleRemoveAdmin(adm.email)} className="text-red-500 p-1 hover:bg-red-500/10 rounded-lg">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { id: 'canDeletePosts', label: 'Delete Posts' },
+                            { id: 'canUploadImages', label: 'Upload Images' },
+                            { id: 'canSetAccessCode', label: 'Access Code' }
+                          ].map(p => (
+                            <button
+                              key={p.id}
+                              onClick={() => togglePermission(adm.email, p.id, adm.permissions[p.id])}
+                              className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${adm.permissions[p.id] ? 'bg-[#0E6B75] border-[#0E6B75] text-white shadow-md' : 'opacity-40 border-current'}`}
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                  </div>
+                  )}
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <h3 className="font-black font-display text-lg mb-4">Keep the memories</h3>
                     <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
@@ -5591,58 +5603,6 @@ function AdminDashboardModal({
                         );
                       })
                     )}
-                  </div>
-                </div>
-              )}
-
-              {activeAdminTab === 'admins' && isSuper && (
-                <div className="space-y-6">
-                  <div>
-                    <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Add New Admin (Gmail)</label>
-                    <div className="flex gap-2">
-                      <input 
-                        type="email"
-                        value={newAdminEmail}
-                        onChange={(e) => setNewAdminEmail(e.target.value)}
-                        placeholder="resident@gmail.com"
-                        className={`flex-1 p-4 rounded-xl border-none outline-none font-bold transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
-                      />
-                      <button 
-                        onClick={handleAddAdmin}
-                        className="px-6 bg-[#0E6B75] text-white rounded-xl hover:scale-105 active:scale-95 transition-all"
-                      >
-                        <Plus className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <h4 className="text-[0.7rem] uppercase tracking-widest font-black opacity-50">Current Administrators</h4>
-                    {allAdmins.map((adm) => (
-                      <div key={adm.id} className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#F8F8FA] border-[#DAD8E3]'}`}>
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="font-bold text-sm">{adm.email}</span>
-                          <button onClick={() => handleRemoveAdmin(adm.email)} className="text-red-500 p-1 hover:bg-red-500/10 rounded-lg">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {[
-                            { id: 'canDeletePosts', label: 'Delete Posts' },
-                            { id: 'canUploadImages', label: 'Upload Images' },
-                            { id: 'canSetAccessCode', label: 'Access Code' }
-                          ].map(p => (
-                            <button
-                              key={p.id}
-                              onClick={() => togglePermission(adm.email, p.id, adm.permissions[p.id])}
-                              className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${adm.permissions[p.id] ? 'bg-[#0E6B75] border-[#0E6B75] text-white shadow-md' : 'opacity-40 border-current'}`}
-                            >
-                              {p.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
                   </div>
                 </div>
               )}
