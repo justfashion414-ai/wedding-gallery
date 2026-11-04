@@ -5243,8 +5243,8 @@ function AdminDashboardModal({
                           ].map(p => (
                             <button
                               key={p.id}
-                              onClick={() => togglePermission(adm.email, p.id, adm.permissions[p.id])}
-                              className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${adm.permissions[p.id] ? 'bg-[#0E6B75] border-[#0E6B75] text-white shadow-md' : 'opacity-40 border-current'}`}
+                              onClick={() => togglePermission(adm.email, p.id, adm.permissions?.[p.id])}
+                              className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${adm.permissions?.[p.id] ? 'bg-[#0E6B75] border-[#0E6B75] text-white shadow-md' : 'opacity-40 border-current'}`}
                             >
                               {p.label}
                             </button>
