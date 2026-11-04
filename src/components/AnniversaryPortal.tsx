@@ -2828,6 +2828,7 @@ function Post({
             <Share2 className="w-[17px] h-[17px]" />
             <span>Share</span>
           </button>
+        </div>
       </div>
     </article>
   );
