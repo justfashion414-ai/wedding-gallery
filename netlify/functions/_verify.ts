@@ -38,6 +38,7 @@ function b64urlToJson(part: string): any {
 
 export interface VerifiedCaller {
   uid: string;
+  email?: string;
 }
 
 /**
@@ -89,7 +90,10 @@ export async function verifyFirebaseIdToken(
     return null;
   }
 
-  return { uid: payload.sub };
+  return {
+    uid: payload.sub,
+    email: typeof payload.email === 'string' ? payload.email : undefined,
+  };
 }
 
 interface SaCache {
@@ -156,26 +160,57 @@ export async function getSaAccessToken(): Promise<string | null> {
   }
 }
 
-/**
- * Read users/{uid}.verified from Firestore using the service account.
- * Call ONLY after verifyFirebaseIdToken has succeeded for the same uid.
- */
-export async function isVerifiedUser(uid: string, projectId: string): Promise<boolean> {
-  if (!uid || !projectId) return false;
+/** Read one Firestore document's fields using the service account. */
+async function getDocFields(path: string, projectId: string): Promise<Record<string, any> | null> {
   const accessToken = await getSaAccessToken();
-  if (!accessToken) return false;
+  if (!accessToken) return null;
   try {
-    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${encodeURIComponent(uid)}`;
+    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: 'no-store',
     });
-    if (!res.ok) return false;
+    if (!res.ok) return null;
     const doc = (await res.json()) as any;
-    return doc?.fields?.verified?.booleanValue === true;
+    return doc?.fields || null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** True when the document holds a non-empty string field under the given name. */
+function hasNonEmptyString(fields: Record<string, any> | null, name: string): boolean {
+  const value = fields?.[name]?.stringValue ?? fields?.[name]?.bytesValue ?? '';
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * Check admins/{email} for the caller's admin record using the service account.
+ * Call ONLY after verifyFirebaseIdToken has succeeded for the same caller.
+ */
+export async function isVerifiedAdmin(email: string | undefined, projectId: string): Promise<boolean> {
+  if (!email || !projectId) return false;
+  const fields = await getDocFields(`admins/${encodeURIComponent(email.toLowerCase())}`, projectId);
+  return Boolean(fields);
+}
+
+/**
+ * Upload gate for a caller whose Firebase ID token has been verified.
+ *  - Admins (a doc in admins/{email}) may upload anywhere.
+ *  - The residents folder holds guest profile photos, so it stays open to any
+ *    signed-in guest: a guest uploads their profile photo before the profile is complete.
+ *  - Every other folder needs a complete guest profile (display name + photo) in residents/{uid}.
+ */
+export async function isVerifiedUser(
+  caller: VerifiedCaller | null,
+  projectId: string,
+  folder?: string
+): Promise<boolean> {
+  if (!caller || !projectId) return false;
+  if (await isVerifiedAdmin(caller.email, projectId)) return true;
+  if (folder === 'residents') return true;
+  const fields = await getDocFields(`residents/${encodeURIComponent(caller.uid)}`, projectId);
+  return hasNonEmptyString(fields, 'displayName') && hasNonEmptyString(fields, 'photoUrl');
 }
 
 /** Extract the project id from the environment. */

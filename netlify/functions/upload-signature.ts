@@ -27,15 +27,16 @@ export const handler = async (event: any) => {
     return { statusCode: 204, headers, body: '' };
   }
 
-  // Auth gate: only a signed-in, verified guest (or admin) may get upload signatures.
+  // Auth gate: a signed-in admin, or a guest who completed their profile, may get
+  // upload signatures. The residents folder (profile photos) is open to any signed-in guest.
   const caller = await verifyFirebaseIdToken(
     event.headers?.authorization || event.headers?.Authorization,
     getProjectId()
   );
   if (!caller) return unauthorized(headers);
-  if (!(await isVerifiedUser(caller.uid, getProjectId()))) return notVerified(headers);
 
   const folder = event.queryStringParameters?.folder || 'ire-akari';
+  if (!(await isVerifiedUser(caller, getProjectId(), folder))) return notVerified(headers);
 
   const cloudName =
     process.env.CLOUDINARY_CLOUD_NAME ||
