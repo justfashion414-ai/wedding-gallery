@@ -1941,6 +1941,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         activeCode={activeAccessCode}
         onUpdateCode={updateAccessCode}
         posts={posts}
+        videoOrientations={videoOrientations}
         onDeletePost={(id: string) => {
           setIsAdminDashboardOpen(false);
           setPostToDelete(id);
@@ -3917,6 +3918,7 @@ function AdminDashboardModal({
   onPermanentDelete,
   currentUserEmail,
   adminPermissions,
+  videoOrientations,
   showToast,
   onBackToMain,
   postAds = [],
@@ -4028,6 +4030,40 @@ function AdminDashboardModal({
   }, [isOpen]);
 
   const isSuper = currentUserEmail === "justfashion414@gmail.com";
+
+  const [modQueue, setModQueue] = useState<'pending' | 'reports' | 'vendors'>('pending');
+  const [postEventFilter, setPostEventFilter] = useState<string>('all');
+  const [postTypeFilter, setPostTypeFilter] = useState<string>('all');
+  const nowHour = new Date().getHours();
+  const greeting = nowHour < 12 ? 'Good morning' : nowHour < 17 ? 'Good afternoon' : 'Good evening';
+  const pendCount = posts.filter((p: any) => p.pending).length;
+  const reportCount = posts.filter((p: any) => ((p as any).reports || 0) > 0).length;
+  const relTime = (d: Date | null) => {
+    if (!d) return 'just now';
+    const s = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (s < 60) return 'just now';
+    const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+    const dd = Math.floor(h / 24); if (dd < 7) return `${dd}d ago`;
+    const w = Math.floor(dd / 7); if (w < 5) return `${w}w ago`;
+    const mo = Math.floor(dd / 30); if (mo < 12) return `${mo} month${mo === 1 ? '' : 's'} ago`;
+    return `${Math.floor(dd / 365)}y ago`;
+  };
+  const postTypeOf = (p: any): 'Photo' | 'Video' | 'Reel' | 'Wish' => {
+    const isVid = (p.mediaTypes || []).some((t: string) => t === 'video') || (p.mediaUrls || []).some((u: string) => /\.(mp4|webm|mov)(\?|$)/i.test(u));
+    if (isVid) return ((p.videoOrientation || (videoOrientations as any)[p.id]) === 'portrait' ? 'Reel' : 'Video');
+    const hasImg = (p.mediaTypes || []).some((t: string) => t === 'image') || (p.mediaUrls || []).some((u: string) => /\.(jpe?g|png|webp|gif)(\?|$)/i.test(u));
+    return hasImg ? 'Photo' : 'Wish';
+  };
+  const handleDismissReport = async (id: string) => {
+    try {
+      await updateDoc(doc(db, 'posts', id), { reports: 0 });
+      showToast('Report dismissed', 'success');
+    } catch (err) {
+      console.error('Dismiss error:', err);
+      showToast('Could not dismiss the report.', 'error');
+    }
+  };
 
   const normalizedNewCode = normalizeCode(newCode);
   const normalizedActiveCode = normalizeCode(activeCode ?? '');
@@ -4168,10 +4204,6 @@ function AdminDashboardModal({
                           </button>
                         ))}
                       </nav>
-                      <button onClick={() => setMobileAdminNavOpen(false)} className="mt-4 flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-white/60 hover:bg-white/10 hover:text-white text-left">
-                        <X className="w-[18px] h-[18px] shrink-0" />
-                        <span>Close menu</span>
-                      </button>
                     </div>
                   </div>
 
@@ -4244,25 +4276,24 @@ function AdminDashboardModal({
               {activeAdminTab === 'overview' && (
                 <div className="space-y-6">
                   <div>
-                    <h2 className="text-2xl font-black font-display tracking-tight">Good day, Dara &amp; Femi</h2>
+                    <h2 className="text-2xl font-black font-display tracking-tight">{greeting}, Dara &amp; Femi</h2>
                     <p className="text-sm opacity-60 mt-0.5">{daysToWedding} days to the wedding. Here is what needs you.</p>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {(() => {
-                      const totalLikes = posts.reduce((s: number, p: any) => s + (p.likeCount || 0) + (p.loveCount || 0), 0);
-                      const videoCount = posts.filter((p: any) => (p.mediaTypes || []).some((t: string) => t === 'video') || (p.mediaUrls || []).some((u: string) => /\.(mp4|webm|mov)$/i.test(u))).length;
+                      const reelCount = posts.filter((p: any) => postTypeOf(p) === 'Reel').length;
+                      const commentTotal = posts.reduce((s: number, p: any) => s + (p.commentCount || 0), 0);
                       const authors = new Set(posts.map((p: any) => (p.authorName || '').trim()).filter(Boolean));
-                      const stats: [string, number, string][] = [
-                        ['Posts', posts.length, 'shared so far'],
-                        ['Videos & reels', videoCount, 'in the feed'],
-                        ['Reactions', totalLikes, 'likes and loves'],
-                        ['Guests', authors.size, 'have posted'],
+                      const stats: [string, number][] = [
+                        ['Posts', posts.length],
+                        ['Reels', reelCount],
+                        ['Comments', commentTotal],
+                        ['Guests joined', authors.size],
                       ];
-                      return stats.map(([label, value, sub]) => (
+                      return stats.map(([label, value]) => (
                         <div key={label} className={`rounded-[20px] p-4 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                           <b className="block text-2xl font-black font-display">{value}</b>
                           <span className="block text-[0.68rem] font-black uppercase tracking-widest opacity-60 mt-1">{label}</span>
-                          <small className="block text-[0.7rem] opacity-50 mt-0.5">{sub}</small>
                         </div>
                       ));
                     })()}
@@ -4270,14 +4301,12 @@ function AdminDashboardModal({
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <h3 className="font-black font-display text-lg mb-3">Needs your attention</h3>
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div><b>{posts.length}</b> {posts.length === 1 ? 'memory' : 'memories'} in the feed</div>
-                        <button onClick={() => setActiveAdminTab('moderation')} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest">Review</button>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <div><b>0</b> reported items</div>
-                        <span className="px-4 py-2 rounded-full text-[0.7rem] font-black uppercase tracking-widest opacity-40">All clear</span>
-                      </div>
+                      {([['pending', pendCount, 'post waiting for approval', 'posts waiting for approval'], ['reports', reportCount, 'reported item', 'reported items'], ['vendors', 0, 'vendor request', 'vendor requests']] as [string, number, string, string][]).map(([q, n, one, many]) => (
+                        <div key={q} className="flex items-center justify-between gap-3">
+                          <div><b>{n}</b> {n === 1 ? one : many}</div>
+                          <button onClick={() => { setActiveAdminTab('moderation'); setModQueue(q as 'pending' | 'reports' | 'vendors'); }} className={`px-4 py-2 rounded-full text-[0.7rem] font-black uppercase tracking-widest ${n ? 'bg-[#0E6B75] text-white' : 'border border-[#DAD8E3] opacity-60'}`}>{n ? 'Review' : 'All clear'}</button>
+                        </div>
+                      ))}
                     </div>
                   </div>
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
@@ -4323,23 +4352,63 @@ function AdminDashboardModal({
                 <div className="space-y-6">
                   <div>
                     <h2 className="text-2xl font-black font-display tracking-tight">Moderation</h2>
-                    <p className="text-sm opacity-60 mt-0.5">Guest posts appear in the feed the moment they are shared. Remove anything that should not be there.</p>
+                    <p className="text-sm opacity-60 mt-0.5">Approve, reject and handle reports.</p>
                   </div>
-                  <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
-                    {posts.slice(0, 12).map((p: any) => (
-                      <div key={p.id} className="flex items-center gap-3 p-4">
-                        <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-bold text-[0.92rem] truncate">{p.authorName || 'A guest'}</p>
-                          <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'}</small>
-                        </div>
-                        {adminPermissions?.canDeletePosts && (
-                          <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest shrink-0">Remove</button>
-                        )}
-                      </div>
+                  <div className={`flex p-1 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#EEEDF3] border-[#DAD8E3]'}`}>
+                    {([['pending', `Posts (${pendCount})`], ['reports', `Reports (${reportCount})`], ['vendors', 'Vendor requests (0)']] as [string, string][]).map(([q, label]) => (
+                      <button key={q} onClick={() => setModQueue(q as 'pending' | 'reports' | 'vendors')} className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${modQueue === q ? 'bg-[#0E6B75] text-white shadow-sm' : 'opacity-60 hover:opacity-100'}`}>{label}</button>
                     ))}
-                    {posts.length === 0 && <p className="p-5 opacity-50 text-sm">Nothing to moderate yet.</p>}
                   </div>
+                  {modQueue === 'pending' && (
+                    pendCount === 0 ? (
+                      <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                        <p className="opacity-50 text-sm">Nothing waiting. New guest posts will appear here when approval is on.</p>
+                      </div>
+                    ) : (
+                      <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                        {posts.filter((p: any) => p.pending).map((p: any) => (
+                          <div key={p.id} className="flex items-center gap-3 p-4">
+                            <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-[0.92rem] truncate">{p.authorName || 'A guest'}</p>
+                              <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'}</small>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              <button onClick={async () => { try { await updateDoc(doc(db, 'posts', p.id), { pending: false }); showToast('Approved. Dara and Femi\u2019s guests can now see it', 'success'); } catch (err) { console.error(err); showToast('Could not approve the post.', 'error'); } }} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest">Approve</button>
+                              <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Reject</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                  {modQueue === 'reports' && (
+                    reportCount === 0 ? (
+                      <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                        <p className="opacity-50 text-sm">No reports. Guests can report a problem from their Settings screen.</p>
+                      </div>
+                    ) : (
+                      <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                        {posts.filter((p: any) => ((p as any).reports || 0) > 0).map((p: any) => (
+                          <div key={p.id} className="flex items-center gap-3 p-4">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-[0.92rem] truncate">Reported by a guest</p>
+                              <small className="block opacity-50 truncate">Post by {p.authorName || 'a guest'} · {p.text || p.caption || ''}</small>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              <button onClick={() => handleDismissReport(p.id)} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Dismiss</button>
+                              <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest">Remove post</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                  {modQueue === 'vendors' && (
+                    <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                      <p className="opacity-50 text-sm">No pending vendor requests.</p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -4349,22 +4418,48 @@ function AdminDashboardModal({
                     <h2 className="text-2xl font-black font-display tracking-tight">All posts</h2>
                     <p className="text-sm opacity-60 mt-0.5">{posts.length} {posts.length === 1 ? 'memory' : 'memories'} shared by your people.</p>
                   </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <select value={postEventFilter} onChange={(e) => setPostEventFilter(e.target.value)} aria-label="Filter by event" className={`p-3 rounded-xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] text-white' : 'bg-white border-[#DAD8E3] text-[#14262D]'} font-bold text-sm`}>
+                      <option value="all">All events</option>
+                      {EVENTS_DATA.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                    </select>
+                    <select value={postTypeFilter} onChange={(e) => setPostTypeFilter(e.target.value)} aria-label="Filter by type" className={`p-3 rounded-xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] text-white' : 'bg-white border-[#DAD8E3] text-[#14262D]'} font-bold text-sm`}>
+                      {['all', 'Photo', 'Video', 'Reel', 'Wish'].map((t) => <option key={t} value={t}>{t === 'all' ? 'All types' : t}</option>)}
+                    </select>
+                  </div>
                   <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
-                    {posts.map((p: any) => (
-                      <div key={p.id} className="p-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-bold text-[0.92rem] truncate">{p.authorName || 'A guest'}</p>
-                            <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'} · ♥ {(p.likeCount || 0) + (p.loveCount || 0)}</small>
+                    {(() => {
+                      const filtered = posts.filter((p: any) => (postEventFilter === 'all' || p.eventId === postEventFilter) && (postTypeFilter === 'all' || postTypeOf(p) === postTypeFilter));
+                      if (filtered.length === 0) return <p className="p-5 opacity-50 text-sm">No posts match. Memories your guests share will show up here.</p>;
+                      return filtered.map((p: any) => {
+                        const t = postTypeOf(p);
+                        const evName = EVENTS_DATA.find((e) => e.id === p.eventId)?.name;
+                        const when = p.timestamp?.toDate ? p.timestamp.toDate() : (p.createdAt?.toDate ? p.createdAt.toDate() : null);
+                        const media = (p.mediaUrls || [])[0];
+                        return (
+                          <div key={p.id} className="flex items-center gap-3 p-4">
+                            <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-[0.92rem] truncate">
+                                {p.authorName || 'A guest'}
+                                <span className="ml-2 px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[0.6rem] font-black uppercase tracking-widest opacity-70">{t}</span>
+                                {evName && <span className="ml-1.5 px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[0.6rem] font-black uppercase tracking-widest opacity-70">{evName}</span>}
+                              </p>
+                              <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'}</small>
+                              <small className="block opacity-40">{(p.likeCount || 0) + (p.loveCount || 0)} likes · {p.commentCount || 0} comments · {relTime(when)}</small>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              {media && (
+                                <button onClick={() => window.open(media, '_blank')} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Download</button>
+                              )}
+                              {adminPermissions?.canDeletePosts && (
+                                <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest">Remove</button>
+                              )}
+                            </div>
                           </div>
-                          {adminPermissions?.canDeletePosts && (
-                            <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest shrink-0">Remove</button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {posts.length === 0 && <p className="p-5 opacity-50 text-sm">No posts match. Memories your guests share will show up here.</p>}
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
               )}
@@ -4426,17 +4521,21 @@ function AdminDashboardModal({
                         {heroImages.slice(0, 14).map((img: string, idx: number) => (
                           <div key={idx} className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 border dark:border-[#22363E] group">
                             <img src={img} className="w-full h-full object-cover" alt="" />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const updated = heroImages.filter((_: string, i: number) => i !== idx);
-                                onUpdateHeroImages(updated);
-                              }}
-                              className="absolute top-1 right-1 p-1 bg-black/70 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                              title="Remove image"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
+                            <div className="absolute top-1 right-1 flex gap-1">
+                              {idx > 0 && (
+                                <button type="button" onClick={() => { const u = [...heroImages]; const t = u[idx - 1]; u[idx - 1] = u[idx]; u[idx] = t; onUpdateHeroImages(u); }} className="p-1 bg-black/70 text-white rounded-full" title="Move earlier">
+                                  <ChevronLeft className="w-3 h-3" />
+                                </button>
+                              )}
+                              {idx < heroImages.length - 1 && (
+                                <button type="button" onClick={() => { const u = [...heroImages]; const t = u[idx + 1]; u[idx + 1] = u[idx]; u[idx] = t; onUpdateHeroImages(u); }} className="p-1 bg-black/70 text-white rounded-full" title="Move later">
+                                  <ChevronRight className="w-3 h-3" />
+                                </button>
+                              )}
+                              <button type="button" onClick={() => onUpdateHeroImages(heroImages.filter((_: string, i: number) => i !== idx))} className="p-1 bg-black/70 text-white rounded-full" title="Remove image">
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
                           </div>
                         ))}
                         {heroImages.length < 14 && (
@@ -4589,45 +4688,6 @@ function AdminDashboardModal({
                     <p className="text-sm opacity-60 mt-0.5">People join without an account. This list shows everyone who has posted.</p>
                   </div>
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                    <h3 className="font-black font-display text-lg mb-2">Invite dashboard access</h3>
-                    <p className="text-sm opacity-60 mb-4">Creates an account with a temporary password. The person must set a permanent password the first time they sign in.</p>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="email"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                        placeholder="name@email.com"
-                        className={`flex-1 p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
-                      />
-                      <select
-                        value={inviteRole}
-                        onChange={(e) => setInviteRole(e.target.value)}
-                        className={`p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
-                      >
-                        <option value="vendor">Vendor</option>
-                        <option value="guest">Guest</option>
-                      </select>
-                      <button onClick={inviteDashboardAccess} disabled={inviteBusy} className="px-6 py-4 rounded-xl bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest disabled:opacity-50">
-                        {inviteBusy ? 'Creating…' : 'Create access'}
-                      </button>
-                    </div>
-                    {inviteResult && (
-                      <div className="mt-4 p-4 rounded-xl bg-[#C8932A]/10 border border-[#C8932A]/30">
-                        <p className="text-sm font-bold">Share this temporary password now. It shows only once.</p>
-                        <div className="flex items-center gap-3 mt-2 flex-wrap">
-                          <code className="px-3 py-2 rounded-lg bg-black/10 font-black tracking-widest">{inviteResult.tempPassword}</code>
-                          <span className="text-sm opacity-70">for {inviteResult.email}</span>
-                          <button
-                            onClick={() => { navigator.clipboard?.writeText(inviteResult.tempPassword); showToast('Temporary password copied'); }}
-                            className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest"
-                          >
-                            Copy
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <h3 className="font-black font-display text-lg mb-3">People who have posted</h3>
                     <div className="space-y-3">
                       {(() => {
@@ -4708,22 +4768,46 @@ function AdminDashboardModal({
                   )}
 
 
-                  <p className="text-sm opacity-50">Hero and footer images now live under "Hero photos" in the sidebar.</p>
-
-                  {isSuper && (
-                    <div className="space-y-6 pt-4 border-t border-black/5 dark:border-white/5">
-                      <div className="bg-[#0E6B75]/5 p-4 rounded-[20px] border border-[#0E6B75]/10">
-                        <div className="flex items-center gap-2 mb-4">
-                          < ShieldCheck className="w-4 h-4 text-[#0E6B75]" />
-                          <h4 className="text-[0.7rem] uppercase tracking-widest font-black text-[#0E6B75]">Super Admin Controls</h4>
-                        </div>
-                        
-                        <div className="space-y-6">
-                          
-                                                  </div>
-                      </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-2">Couple accounts</h3>
+                    <p className="text-sm opacity-60 mb-4">Invite another admin with their email. They get a temporary password and must set a permanent one the first time they sign in.</p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="email"
+                        value={inviteEmail}
+                        onChange={(e) => setInviteEmail(e.target.value)}
+                        placeholder="name@email.com"
+                        className={`flex-1 p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+                      />
+                      <select
+                        value={inviteRole}
+                        onChange={(e) => setInviteRole(e.target.value)}
+                        className={`p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
+                      >
+                        <option value="vendor">Vendor</option>
+                        <option value="guest">Guest</option>
+                      </select>
+                      <button onClick={inviteDashboardAccess} disabled={inviteBusy} className="px-6 py-4 rounded-xl bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest disabled:opacity-50">
+                        {inviteBusy ? 'Creating…' : 'Invite'}
+                      </button>
                     </div>
-                  )}
+                    {inviteResult && (
+                      <div className="mt-4 p-4 rounded-xl bg-[#C8932A]/10 border border-[#C8932A]/30">
+                        <p className="text-sm font-bold">Share this temporary password now. It shows only once.</p>
+                        <div className="flex items-center gap-3 mt-2 flex-wrap">
+                          <code className="px-3 py-2 rounded-lg bg-black/10 font-black tracking-widest">{inviteResult.tempPassword}</code>
+                          <span className="text-sm opacity-70">for {inviteResult.email}</span>
+                          <button
+                            onClick={() => { navigator.clipboard?.writeText(inviteResult.tempPassword); showToast('Temporary password copied'); }}
+                            className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-sm opacity-50">Guests and vendors they invite to post keep working from the Guests tab.</p>
                 </div>
               )}
 
@@ -5153,27 +5237,6 @@ function AdminDashboardModal({
 
             </div>
 
-            {/* Modal Footer */}
-            <div className={`p-6 border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-              <div className="flex gap-4">
-                <button 
-                  onClick={() => {
-                    signOut(auth);
-                    onClose();
-                  }}
-                  className="flex-1 py-3 rounded-xl border-2 border-red-500/20 text-red-500 font-bold flex items-center justify-center gap-2 hover:bg-red-500/10 transition-all text-xs"
-                >
-                  <LogOut className="w-4 h-4" />
-                  Sign Out Admin
-                </button>
-                <button 
-                  onClick={onClose}
-                  className="flex-1 py-3 rounded-xl bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest hover:scale-[1.02] active:scale-95 transition-all shadow-lg shadow-[#0E6B75]/20"
-                >
-                  Done
-                </button>
-              </div>
-            </div>
           </motion.div>
         </>
       )}
