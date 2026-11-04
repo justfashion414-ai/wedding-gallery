@@ -52,7 +52,8 @@ import {
   deleteDoc,
   serverTimestamp,
   writeBatch,
-  increment
+  increment,
+  updateDoc
 } from 'firebase/firestore';
 
 
@@ -421,6 +422,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [userLoves, setUserLoves] = useState<Record<string, boolean>>({});
   const [reactionsLoading, setReactionsLoading] = useState(true);
   const [sharingPost, setSharingPost] = useState<any>(null);
+  const [commentsPost, setCommentsPost] = useState<any>(null);
+  const [sampleLiked, setSampleLiked] = useState<Record<string, boolean>>({});
   const [activeMediaIndex, setActiveMediaIndex] = useState<{postId: string, index: number} | null>(null);
 
   // PWA Install, Launch Follow-up Splash & Offline State
@@ -1593,8 +1596,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                       return (
                         <>
                           <p className={`py-6 text-center text-[0.7rem] font-black uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample memories · real guest posts appear here</p>
-                          {SAMPLE_POSTS.filter((sp) => sp.mediaType !== 'reel' && sp.mediaType !== 'video').map((sp) => (
-                            <SamplePostCard key={sp.id} post={sp} isDarkMode={isDarkMode} />
+                          {SAMPLE_POSTS.filter((sp) => sp.mediaType !== 'reel').map((sp) => (
+                            <SamplePostCard key={sp.id} post={sp} isDarkMode={isDarkMode} liked={!!sampleLiked[sp.id]} onLike={() => setSampleLiked((m) => ({ ...m, [sp.id]: !m[sp.id] }))} onComment={() => setCommentsPost(sp)} onShare={() => setSharingPost(sp)} />
                           ))}
                         </>
                       );
@@ -1634,6 +1637,10 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           onLove={() => handleToggleReaction(p.id, 'love')}
                           onShare={() => setSharingPost(p)}
                           onOpenMedia={(mIdx: number) => setActiveMediaIndex({ postId: p.id, index: mIdx })}
+                          onComment={() => setCommentsPost(p)}
+                          commentCount={p.commentCount || 0}
+                          eventName={p.eventName || ''}
+                          authorRole={postRole(p)}
                         />
                       );
 
@@ -1654,41 +1661,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     return feedElements;
                   })()}
                 </div>
-              ) : !posts.some((p) => {
-                  const media: string[] = p.mediaUrls || (p.mediaUrl ? [p.mediaUrl] : []);
-                  const hasVideo = media.some((u: string, idx: number) =>
-                    p.mediaTypes?.[idx] === 'video' ||
-                    u.toLowerCase().includes('.mp4') ||
-                    u.toLowerCase().includes('.webm') ||
-                    u.toLowerCase().includes('.mov') ||
-                    u.includes('/video/')
-                  );
-                  const orientation = p.videoOrientation || videoOrientations[p.id];
-                  return hasVideo && media.length === 1 && orientation === 'portrait';
-                }) ? (
-                <div className="border-t-[6px] border-[#D0CEDB] dark:border-[#1E323A]">
-                  <p className={`py-6 text-center text-[0.7rem] font-black uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample reels · guest videos appear here</p>
-                  <div className="grid grid-cols-2 gap-2 p-4">
-                    {SAMPLE_POSTS.filter((sp) => sp.mediaType === 'reel').concat(SAMPLE_POSTS.filter((sp) => sp.mediaType === 'video')).slice(0, 4).map((sp, idx) => {
-                      const [c1, c2] = (SAMPLE_TILE_COLORS[sp.tileColor] || SAMPLE_TILE_COLORS[0]).split(',');
-                      return (
-                        <div key={idx} className="relative aspect-[9/16] rounded-2xl overflow-hidden" style={{ background: `linear-gradient(160deg, ${c1}, ${c2})` }}>
-                          <div className="absolute inset-0 opacity-30" style={{ background: 'radial-gradient(circle at 70% 20%, rgba(255,255,255,0.35), transparent 60%)' }} />
-                          <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
-                            <div className="w-12 h-12 rounded-full bg-white/25 border border-white/50 backdrop-blur-sm flex items-center justify-center">
-                              <Play className="w-6 h-6 text-white ml-0.5" />
-                            </div>
-                          </div>
-                          <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/60 to-transparent">
-                            <p className="text-white font-bold text-[0.8rem] truncate">{sp.authorName}</p>
-                            <p className="text-white/80 text-[0.68rem] truncate">{sp.text}</p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
+                            ) : (
                 <ReelsFeed
                   reels={(() => {
                     const filteredReels = posts.filter((p) => {
@@ -1712,11 +1685,15 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                       return hasVideo && orientation === 'portrait' && !hasImage;
                     });
 
+                    const finalReels = filteredReels.length > 0
+                      ? filteredReels
+                      : SAMPLE_POSTS.filter((sp) => sp.mediaType === 'reel');
+
                     const activeReelAds = shuffledReelAds.length > 0 ? shuffledReelAds : reelAds;
-                    if (activeReelAds.length === 0) return filteredReels;
+                    if (activeReelAds.length === 0) return finalReels;
 
                     const combinedReels: any[] = [];
-                    filteredReels.forEach((r, idx) => {
+                    finalReels.forEach((r, idx) => {
                       combinedReels.push(r);
                       // Place a video ad after every 3 reels
                       if ((idx + 1) % 3 === 0) {
@@ -1739,6 +1716,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   onLike={(id: string) => handleToggleReaction(id, 'like')}
                   onLove={(id: string) => handleToggleReaction(id, 'love')}
                   onShare={(p: any) => setSharingPost(p)}
+                  onComment={(p: any) => setCommentsPost(p)}
                 />
               )}
             </motion.div>
@@ -2473,6 +2451,18 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           showToast={showToast}
         />
       )}
+
+      {commentsPost && (
+        <CommentsSheet
+          post={commentsPost}
+          isDarkMode={isDarkMode}
+          user={user}
+          displayName={displayName}
+          avatar={avatar}
+          isAdmin={isAdmin}
+          onClose={() => setCommentsPost(null)}
+        />
+      )}
       
       {activeMediaIndex && (
         <MediaLightbox 
@@ -2705,7 +2695,11 @@ function Post({
   onLike,
   onLove,
   onShare,
-  onOpenMedia
+  onOpenMedia,
+  onComment,
+  commentCount = 0,
+  eventName,
+  authorRole
 }: any) {
   const [localLiked, setLocalLiked] = useState(false);
   const [localLoved, setLocalLoved] = useState(false);
@@ -2743,10 +2737,17 @@ function Post({
         <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <strong className="text-[1rem] leading-tight">{name}</strong>
+            {authorRole === 'vendor' && (<span className="ml-1 inline-block align-middle text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-[#21122B]">Official</span>)}
+            {authorRole === 'couple' && (<span className="ml-1 inline-block align-middle text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#0E6B75] text-white">Couple</span>)}
             <span className="text-[0.8rem] text-[#5A6970] dark:text-[#93A4AB] flex items-center gap-1">
               <span aria-hidden="true">·</span>
               <span>{time}</span>
             </span>
+          </div>
+          {eventName && (
+            <span className="block w-full text-[0.8rem] text-[#5A6970] dark:text-[#93A4AB]">{eventName}</span>
+          )}
+          <div className="contents">
           </div>
           {isAdmin && (
             <button 
@@ -2776,7 +2777,10 @@ function Post({
         )}
         
         {mediaUrls && mediaUrls.length > 0 && (
-          <div className={`mt-[10px] rounded-[18px] overflow-hidden border border-[#DAD8E3] dark:border-[#22363E] bg-black shadow-md ${mediaUrls.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
+          <div className={`mt-[10px] relative rounded-[18px] overflow-hidden border border-[#DAD8E3] dark:border-[#22363E] bg-black shadow-md ${mediaUrls.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
+            {eventName && (
+              <span className="absolute bottom-3 left-3 z-10 px-2.5 py-[3px] rounded-full bg-black/40 text-white text-[13px] pointer-events-none">{eventName}</span>
+            )}
             {mediaUrls.map((url: string, i: number) => {
               const isVideo = mediaTypes?.[i] === 'video' || url.toLowerCase().includes('.mp4') || url.toLowerCase().includes('.webm') || url.toLowerCase().includes('.mov') || url.includes('/video/');
               return (
@@ -2802,29 +2806,28 @@ function Post({
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-2 w-full mt-3 pt-2 border-t border-[#DAD8E3]/40 dark:border-[#22363E]/60">
-          <button 
+        <div className="grid grid-cols-3 gap-2 w-full mt-3">
+          <button
             onClick={onLike}
-            className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[0.85rem] font-bold transition-all ${displayLiked ? 'text-[#0E6B75] bg-[#0E6B75]/10' : 'text-[#5A6970] dark:text-[#93A4AB] hover:bg-[#0E6B75]/5'}`}
+            className={`flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border text-[13px] transition-all ${displayLiked ? 'text-[#0E6B75] dark:text-[#4FC3CF] border-[#0E6B75] dark:border-[#4FC3CF] font-bold' : 'text-[#5A6970] dark:text-[#93A4AB] border-[#DAD8E3] dark:border-[#22363E] font-medium hover:border-[#0E6B75]/60'}`}
           >
-            <ThumbsUp className={`w-[18px] h-[18px] ${displayLiked ? 'fill-current' : ''}`} />
-            <span>{likeCount > 0 ? (likeCount > 999 ? (likeCount/1000).toFixed(1) + 'K' : likeCount) : 'Like'}</span>
+            <ThumbsUp className="w-[17px] h-[17px]" />
+            <span>Like{likeCount > 0 ? ` ${likeCount}` : ''}</span>
           </button>
-          <button 
-            onClick={onLove}
-            className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[0.85rem] font-bold transition-all ${displayLoved ? 'text-red-500 bg-red-500/10' : 'text-[#5A6970] dark:text-[#93A4AB] hover:bg-red-500/5'}`}
+          <button
+            onClick={onComment}
+            className="flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[13px] font-medium text-[#5A6970] dark:text-[#93A4AB] hover:border-[#0E6B75]/60 transition-all"
           >
-            <Heart className={`w-[18px] h-[18px] ${displayLoved ? 'fill-current' : ''}`} />
-            <span>{loveCount > 0 ? (loveCount > 999 ? (loveCount/1000).toFixed(1) + 'K' : loveCount) : 'Love'}</span>
+            <MessageCircle className="w-[17px] h-[17px]" />
+            <span>Comment{commentCount > 0 ? ` ${commentCount}` : ''}</span>
           </button>
-          <button 
+          <button
             onClick={onShare}
-            className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[0.85rem] font-bold text-[#5A6970] dark:text-[#93A4AB] hover:bg-[#0E6B75]/5 transition-all"
+            className="flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[13px] font-medium text-[#5A6970] dark:text-[#93A4AB] hover:border-[#0E6B75]/60 transition-all"
           >
-            <Share2 className="w-[18px] h-[18px]" />
+            <Share2 className="w-[17px] h-[17px]" />
             <span>Share</span>
           </button>
-        </div>
       </div>
     </article>
   );
@@ -3022,7 +3025,7 @@ function PostAdCard({ ad, isDarkMode }: { ad: AdItem; isDarkMode: boolean; [key:
   );
 }
 
-function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete, onLike, onLove, onShare }: any) {
+function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete, onLike, onLove, onShare, onComment }: any) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -3059,7 +3062,7 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="h-[calc(100dvh-150px)] min-h-[420px] w-full overflow-y-scroll snap-y snap-mandatory no-scrollbar relative rounded-[28px]"
+      className="h-[calc(100dvh-150px)] min-h-[420px] w-full overflow-y-scroll snap-y snap-mandatory no-scrollbar relative rounded-[20px]"
     >
       {reels.map((reel: any, idx: number) => (
         <ReelCard
@@ -3074,6 +3077,7 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
           onLike={() => onLike(reel.id)}
           onLove={() => onLove(reel.id)}
           onShare={() => onShare(reel)}
+          onComment={() => onComment && onComment(reel)}
           hasNext={idx < reels.length - 1}
         />
       ))}
@@ -3092,6 +3096,7 @@ function ReelCard({
   onLike,
   onLove,
   onShare,
+  onComment,
   hasNext
 }: any) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -3099,6 +3104,8 @@ function ReelCard({
   const [localLiked, setLocalLiked] = useState(false);
   const [localLoved, setLocalLoved] = useState(false);
 
+  const isSample = String(reel.id || '').startsWith('sample-');
+  const reelRole = postRole(reel);
   const media: string[] = reel.mediaUrls || (reel.mediaUrl ? [reel.mediaUrl] : []);
   const videoUrl = media.find((u: string, idx: number) =>
     reel.mediaTypes?.[idx] === 'video' ||
@@ -3109,7 +3116,7 @@ function ReelCard({
   ) || media[0];
 
   useEffect(() => {
-    if (!user || !reel.id) return;
+    if (isSample || !user || !reel.id) return;
     const reactionRef = doc(db, 'posts', reel.id, 'reactions', user.uid);
     const unsub = onSnapshot(reactionRef, (snap) => {
       if (snap.exists()) {
@@ -3164,8 +3171,15 @@ function ReelCard({
 
   return (
     <div
-      className="snap-start snap-always w-full h-full rounded-[28px] relative bg-black flex items-center justify-center overflow-hidden select-none shadow-2xl border border-[#DAD8E3] dark:border-[#22363E]"
+      className="snap-start snap-always w-full h-full rounded-[20px] relative bg-black flex items-center justify-center overflow-hidden select-none shadow-2xl border border-[#DAD8E3] dark:border-[#22363E]"
     >
+      {isSample ? (
+        <div className="absolute inset-0 flex items-center justify-center" style={{ background: sampleArt(reel.eventName) }}>
+          <div className="w-16 h-16 rounded-full bg-white/80 flex items-center justify-center">
+            <Play className="w-7 h-7 text-[#21122B] fill-current ml-0.5" />
+          </div>
+        </div>
+      ) : (
       <video
         ref={videoRef}
         src={videoUrl}
@@ -3175,6 +3189,7 @@ function ReelCard({
         muted={isMuted}
         onClick={togglePlay}
       />
+      )}
 
       {/* Play/Pause Center Indicator */}
       {!isPlaying && (
@@ -3182,8 +3197,8 @@ function ReelCard({
           onClick={togglePlay}
           className="absolute inset-0 flex items-center justify-center bg-black/20 cursor-pointer"
         >
-          <div className="w-16 h-16 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center text-white">
-            <Play className="w-8 h-8 fill-current ml-1" />
+          <div className="w-16 h-16 rounded-full bg-white/80 flex items-center justify-center">
+            <Play className="w-7 h-7 text-[#21122B] fill-current ml-0.5" />
           </div>
         </div>
       )}
@@ -3216,32 +3231,61 @@ function ReelCard({
         </div>
       </div>
 
-      {/* Bottom Scrim & Author Info + Spread Action Bar */}
-      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/55 to-transparent p-5 pt-16 text-white z-10">
-        <div className="flex items-center gap-3 mb-2">
-          <div className={`w-10 h-10 rounded-full overflow-hidden border-2 flex items-center justify-center font-bold text-sm shrink-0 ${
-            reel.isAd ? 'border-[#C9A24B] bg-[#C9A24B] text-[#14262D]' : 'border-[#0E6B75] bg-[#0E6B75] text-white'
-          }`}>
+      {/* Vertical side action stack: like, comment, share */}
+      <div className="absolute right-2.5 bottom-[76px] z-20 flex flex-col items-center gap-4">
+        <button
+          onClick={isSample ? () => setLocalLiked((v) => !v) : onLike}
+          className="flex flex-col items-center gap-1 text-white"
+          aria-label="Like"
+        >
+          <span className={`w-12 h-12 rounded-full grid place-items-center ${localLiked ? 'bg-[#0E6B75]' : 'bg-black/40'}`}>
+            <ThumbsUp className="w-6 h-6" />
+          </span>
+          <span className="text-xs font-semibold">{(reel.likeCount || 0) + (isSample && localLiked ? 1 : 0)}</span>
+        </button>
+        <button onClick={() => onComment && onComment(reel)} className="flex flex-col items-center gap-1 text-white" aria-label="Comments">
+          <span className="w-12 h-12 rounded-full bg-black/40 grid place-items-center">
+            <MessageCircle className="w-6 h-6" />
+          </span>
+          <span className="text-xs font-semibold">{reel.commentCount || 0}</span>
+        </button>
+        <button onClick={onShare ? () => onShare(reel) : undefined} className="flex flex-col items-center gap-1 text-white" aria-label="Share">
+          <span className="w-12 h-12 rounded-full bg-black/40 grid place-items-center">
+            <Share2 className="w-6 h-6" />
+          </span>
+          <span className="text-xs font-semibold">Share</span>
+        </button>
+      </div>
+
+      {/* Bottom scrim & author info */}
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/55 to-transparent p-4 pt-11 pr-[84px] text-white z-10">
+        <div className="flex items-center gap-2.5">
+          <div className="w-[30px] h-[30px] rounded-full overflow-hidden flex items-center justify-center font-bold text-[13px] shrink-0 bg-[#0E6B75] text-white">
             {reel.isAd ? (
-              <Megaphone className="w-5 h-5" />
+              <Megaphone className="w-4 h-4" />
             ) : reel.authorPhoto ? (
               <img src={reel.authorPhoto} className="w-full h-full object-cover" alt="" />
             ) : (
-              <span>{(reel.authorName || 'R')[0].toUpperCase()}</span>
+              <span>{(reel.authorName || 'R').charAt(0).toUpperCase()}</span>
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <strong className="block text-sm font-bold leading-tight truncate">
-              {reel.isAd ? (reel.sponsorName || 'Featured Partner') : (reel.authorName || 'Guest')}
-            </strong>
-            <span className="text-[0.75rem] text-white/70">
-              {reel.isAd ? 'Sponsored Video' : formattedDate}
-            </span>
+            <div className="flex items-center flex-wrap gap-x-1.5">
+              <strong className="text-[0.9rem] font-bold leading-tight truncate">
+                {reel.isAd ? (reel.sponsorName || 'Featured Partner') : (reel.authorName || 'Guest')}
+              </strong>
+              {reelRole === 'vendor' && <span className="text-[10px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-[#21122B]">Official</span>}
+              {reelRole === 'couple' && <span className="text-[10px] font-bold px-2 py-[1px] rounded-full bg-[#0E6B75] text-white">Couple</span>}
+              <span className="text-[0.7rem] text-white/70"> · {reel.isAd ? 'Sponsored' : formattedDate}</span>
+            </div>
+            {(reel.isAd || reel.eventName) && (
+              <p className="text-[0.7rem] text-white/70 truncate">{reel.isAd ? 'Sponsored Video' : reel.eventName}</p>
+            )}
           </div>
         </div>
 
         {(reel.headline || reel.text || reel.description) && (
-          <div className="mb-3">
+          <div className="mt-1.5">
             {reel.headline && (
               <p className="text-sm font-bold text-white leading-snug">{reel.headline}</p>
             )}
@@ -3253,9 +3297,8 @@ function ReelCard({
           </div>
         )}
 
-        {/* Full-Width 3-Button Bar: Like, Love, Share (or Sponsored CTA for Reel Ads) */}
-        {reel.isAd ? (
-          <div className="w-full pt-2.5 border-t border-white/15">
+        {reel.isAd && (
+          <div className="w-full mt-2.5 pt-2.5 border-t border-white/15">
             {formatExternalUrl(reel.ctaUrl) ? (
               <a
                 href={formatExternalUrl(reel.ctaUrl)}
@@ -3272,109 +3315,218 @@ function ReelCard({
               </div>
             )}
           </div>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 w-full pt-2.5 border-t border-white/15">
-            <button
-              onClick={onLike}
-              className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
-                localLiked ? 'bg-[#0E6B75] text-white' : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              <ThumbsUp className={`w-4 h-4 ${localLiked ? 'fill-current' : ''}`} />
-              <span>{reel.likeCount > 0 ? reel.likeCount : 'Like'}</span>
-            </button>
-            <button
-              onClick={onLove}
-              className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
-                localLoved ? 'bg-red-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              <Heart className={`w-4 h-4 ${localLoved ? 'fill-current' : ''}`} />
-              <span>{reel.loveCount > 0 ? reel.loveCount : 'Love'}</span>
-            </button>
-            <button
-              onClick={onShare}
-              className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold bg-white/10 text-white hover:bg-white/20 transition-all"
-            >
-              <Share2 className="w-4 h-4" />
-              <span>Share</span>
-            </button>
-          </div>
         )}
-      </div>
     </div>
   );
 }
 
-// Sample placeholder palette matching the prototype feed (gradient tiles, no stock imagery)
-const SAMPLE_TILE_COLORS = [
-  '#d98e3c,#8a3b1d', '#3d8fb3,#1c3f6e', '#7bb36b,#2c6b45', '#c46bb0,#5b2a7a',
-  '#0e6b75,#073d31', '#c8932a,#7a4a14', '#d23b5e,#7a1730', '#2b5fb3,#173769',
-];
+// Sample placeholder data matching the prototype feed (gradient tiles, no stock imagery)
+const VENDOR_AUTHOR_NAMES = ['Lens & Light Studio', 'Kiln Films'];
+const COUPLE_UID = 'p8BAKdDJEaYYJy0lHuQtzyntynr1';
+const postRole = (p: any): string => {
+  if (!p || p.isAd) return '';
+  if (p.authorRole) return p.authorRole;
+  if (VENDOR_AUTHOR_NAMES.includes(p.authorName || '')) return 'vendor';
+  if (p.authorUid === COUPLE_UID) return 'couple';
+  return '';
+};
+const EVENT_HUE_INDEX: Record<string, number> = {
+  'Introduction': 0, 'Engagement': 1, 'Court Wedding': 2, 'Bridal Shower': 3,
+  "Groom's Party": 4, 'Church Wedding': 5, 'Reception': 6, 'Thanksgiving': 7,
+};
+const sampleArt = (eventName?: string) => {
+  const h = ((EVENT_HUE_INDEX[eventName || ''] ?? 0) * 47 + 260) % 360;
+  return `linear-gradient(135deg, hsl(${h},55%,38%), hsl(${(h + 40) % 360},60%,22%))`;
+};
+const AVATAR_COLORS = ['#7b2d8e', '#0e6b57', '#c8932a', '#d23b5e', '#2b5fb3', '#555555'];
+const avatarColor = (name?: string) => AVATAR_COLORS[(name || 'G').length % AVATAR_COLORS.length];
 
 const SAMPLE_POSTS = [
-  { id: 'sample-1', authorName: 'Aunty Ronke', eventName: 'Introduction', text: 'Dara walking in with her aunties.', tileColor: 0, mediaType: 'image', likeCount: 14, commentCount: 0, timeAgo: '4 months ago' },
-  { id: 'sample-2', authorName: 'Tolu', eventName: 'Engagement', text: 'The moment Femi went down on one knee!', tileColor: 1, mediaType: 'video', likeCount: 42, commentCount: 2, timeAgo: '3 months ago' },
-  { id: 'sample-3', authorName: 'Kiln Films', eventName: 'Engagement', text: 'Engagement highlight reel.', tileColor: 2, mediaType: 'reel', likeCount: 27, commentCount: 1, timeAgo: '3 months ago' },
-  { id: 'sample-4', authorName: 'Chidi', eventName: 'Court Wedding', text: 'Femi, my guy. Cheers to forever.', tileColor: 3, mediaType: 'wish', likeCount: 9, commentCount: 0, timeAgo: '2 months ago' },
-  { id: 'sample-5', authorName: 'Lens & Light Studio', eventName: 'Introduction', text: 'Full introduction album, 212 photos.', tileColor: 4, mediaType: 'image', likeCount: 31, commentCount: 1, timeAgo: '4 months ago' },
+  { id: 'sample-1', authorName: 'Aunty Ronke', role: 'guest', eventName: 'Introduction', mediaType: 'image', text: 'Dara walking in with her aunties. We cried before the first prayer.', likeCount: 14, commentCount: 1, timeAgo: '20 Jun 2026, 16:20' },
+  { id: 'sample-2', authorName: 'Lens & Light Studio', role: 'vendor', eventName: 'Introduction', mediaType: 'image', text: 'Full introduction album, 212 photos, delivered.', likeCount: 31, commentCount: 0, timeAgo: '20 Jun 2026, 18:02' },
+  { id: 'sample-3', authorName: 'Tolu', role: 'guest', eventName: 'Engagement', mediaType: 'video', text: 'The exact moment Femi went down on one knee!', likeCount: 42, commentCount: 2, timeAgo: '18 Jul 2026, 12:41' },
+  { id: 'sample-4', authorName: 'Kiln Films', role: 'vendor', eventName: 'Engagement', mediaType: 'reel', text: 'Engagement highlight reel.', likeCount: 27, commentCount: 0, timeAgo: '18 Jul 2026, 13:15' },
+  { id: 'sample-5', authorName: 'Chidi', role: 'guest', eventName: 'Engagement', mediaType: 'wish', text: 'Femi, my guy. Dara, thank you for making him smile like this. Cheers to forever.', likeCount: 9, commentCount: 0, timeAgo: '18 Jul 2026, 21:30' },
+  { id: 'sample-6', authorName: 'Kemi', role: 'guest', eventName: 'Court Wedding', mediaType: 'reel', text: 'Signed, sealed, still in our work clothes.', likeCount: 19, commentCount: 0, timeAgo: '28 Aug 2026, 14:05' },
+  { id: 'sample-7', authorName: 'Dara', role: 'couple', eventName: 'Introduction', mediaType: 'reel', text: 'Dancing in before the families. Look at my mum!', likeCount: 58, commentCount: 0, timeAgo: '20 Jun 2026, 17:10' },
 ];
 
-function SamplePostCard({ post, isDarkMode }: { post: any; isDarkMode: boolean }) {
-  const [c1, c2] = (SAMPLE_TILE_COLORS[post.tileColor] || SAMPLE_TILE_COLORS[0]).split(',');
+const SAMPLE_COMMENTS: Record<string, Array<{ authorName: string; timeAgo: string; text: string }>> = {
+  'sample-3': [
+    { authorName: 'Aunty Ronke', timeAgo: '18 Jul 2026, 13:02', text: 'I screamed so loud, my neck is still sore!' },
+    { authorName: 'Kemi', timeAgo: '18 Jul 2026, 13:20', text: 'Femi on one knee, I am not okay.' },
+  ],
+  'sample-1': [
+    { authorName: 'Chidi', timeAgo: '20 Jun 2026, 19:40', text: 'The family photos came out so well.' },
+  ],
+};
+function SamplePostCard({ post, isDarkMode, liked, onLike, onComment, onShare }: { post: any; isDarkMode: boolean; liked: boolean; onLike: () => void; onComment: () => void; onShare: () => void }) {
   const isWish = post.mediaType === 'wish';
   const isMotion = post.mediaType === 'video' || post.mediaType === 'reel';
+  const likeShown = (post.likeCount || 0) + (liked ? 1 : 0);
+  const mutedCls = isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]';
   return (
-    <article className={`p-4 border-b ${isDarkMode ? 'border-[#1E323A]' : 'border-[#DAD8E3]/70'}`}>
-      <div className="flex items-start gap-3 mb-3">
-        <div
-          className="w-11 h-11 rounded-2xl flex items-center justify-center text-white text-lg shrink-0 shadow-sm"
-          style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}
-        >
-          {isWish ? '\u275D' : '\u2600'}
+    <article className={`px-4 py-3.5 border-t-[6px] ${isDarkMode ? 'border-[#1E323A]' : 'border-[#DAD8E3]'}`}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-white text-[13px] font-bold shrink-0" style={{ background: avatarColor(post.authorName) }}>
+          {(post.authorName || 'G').charAt(0).toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-black text-[0.95rem] truncate">{post.authorName}</p>
-          <p className={`text-[0.7rem] font-bold ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>
-            {post.eventName} · {post.timeAgo}
-          </p>
+          <div className="flex items-center flex-wrap gap-x-1.5">
+            <strong className="text-[0.95rem] leading-tight">{post.authorName}</strong>
+            {post.role === 'vendor' && <span className="text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-[#21122B]">Official</span>}
+            {post.role === 'couple' && <span className="text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#0E6B75] text-white">Couple</span>}
+            <span className={`text-[0.72rem] ${mutedCls}`}> · {post.timeAgo}</span>
+          </div>
+          <p className={`text-[0.72rem] ${mutedCls}`}>{post.eventName}</p>
         </div>
       </div>
-      {!isWish && <p className="text-[0.95rem] leading-relaxed mb-3">{post.text}</p>}
+      {!isWish && <p className="text-[0.95rem] leading-relaxed mt-1">{post.text}</p>}
       {isWish ? (
-        <div className={`rounded-2xl border p-5 text-center ${isDarkMode ? 'border-[#22363E] bg-[#0B171C]' : 'border-[#DAD8E3] bg-[#F6F5FA]'}`}>
-          <p className="font-display text-[1.15rem] italic leading-relaxed">{post.text}</p>
-        </div>
+        <p className="font-display italic text-[1.25rem] leading-[1.35] py-[14px] px-1">&ldquo;{post.text}&rdquo;</p>
       ) : (
-        <div
-          className="relative rounded-2xl overflow-hidden aspect-[4/3] flex items-center justify-center"
-          style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}
-        >
-          <div className="absolute inset-0 opacity-30" style={{ background: 'radial-gradient(circle at 70% 20%, rgba(255,255,255,0.35), transparent 60%)' }} />
-          {isMotion ? (
-            <div className="w-14 h-14 rounded-full bg-white/25 border border-white/50 backdrop-blur-sm flex items-center justify-center">
-              <Play className="w-7 h-7 text-white ml-0.5" />
-            </div>
-          ) : (
-            <span className="text-white/70 text-3xl">⚘</span>
-          )}
+        <div className="relative mt-2.5 rounded-[14px] overflow-hidden h-[240px] flex items-end p-3" style={{ background: sampleArt(post.eventName) }}>
           {isMotion && (
-            <span className="absolute bottom-3 right-3 px-2 py-0.5 rounded-full bg-black/40 text-white text-[0.62rem] font-black uppercase tracking-widest">Reel</span>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-[58px] h-[58px] rounded-full bg-white/80 flex items-center justify-center">
+                <Play className="w-6 h-6 text-[#21122B] fill-current ml-0.5" />
+              </div>
+            </div>
           )}
+          <span className="relative px-2.5 py-[3px] rounded-full bg-black/40 text-white text-[13px]">{post.eventName}</span>
         </div>
       )}
-      <div className={`flex items-center gap-6 mt-3 text-[0.82rem] ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>
-        <span className="flex items-center gap-1.5">
-          <Heart className="w-4 h-4" /> {post.likeCount}
-        </span>
-        <span className="flex items-center gap-1.5">
-          <MessageCircle className="w-4 h-4" /> {post.commentCount}
-        </span>
-        <span className="flex items-center gap-1.5">
-          <Share2 className="w-4 h-4" /> Share
-        </span>
+      <div className="grid grid-cols-3 gap-2 mt-2.5">
+        <button
+          onClick={onLike}
+          className={`flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border text-[13px] transition-all ${liked ? 'text-[#0E6B75] dark:text-[#4FC3CF] border-[#0E6B75] dark:border-[#4FC3CF] font-bold' : `${mutedCls} border-[#DAD8E3] dark:border-[#22363E] font-medium`}`}
+        >
+          <ThumbsUp className="w-[17px] h-[17px]" />
+          <span>Like{likeShown > 0 ? ` ${likeShown}` : ''}</span>
+        </button>
+        <button
+          onClick={onComment}
+          className={`flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[13px] font-medium ${mutedCls}`}
+        >
+          <MessageCircle className="w-[17px] h-[17px]" />
+          <span>Comment{post.commentCount > 0 ? ` ${post.commentCount}` : ''}</span>
+        </button>
+        <button
+          onClick={onShare}
+          className={`flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[13px] font-medium ${mutedCls}`}
+        >
+          <Share2 className="w-[17px] h-[17px]" />
+          <span>Share</span>
+        </button>
       </div>
     </article>
+  );
+}
+function CommentsSheet({ post, isDarkMode, user, displayName, avatar, isAdmin, onClose }: any) {
+  const isSample = String(post?.id || '').startsWith('sample-');
+  const [comments, setComments] = useState<any[]>(isSample ? (SAMPLE_COMMENTS[post.id] || []) : []);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (isSample || !post?.id) return;
+    const q = query(collection(db, 'posts', post.id, 'comments'), orderBy('createdAt', 'asc'));
+    const unsub = onSnapshot(q, (snap) => {
+      setComments(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, (err) => console.error('comments load failed', err));
+    return () => unsub();
+  }, [isSample, post?.id]);
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body || sending) return;
+    setSending(true);
+    try {
+      if (isSample) {
+        setComments((prev) => [...prev, { authorName: displayName || 'Guest', text: body, timeAgo: 'Just now' }]);
+      } else {
+        await addDoc(collection(db, 'posts', post.id, 'comments'), {
+          authorUid: user?.uid || null,
+          authorName: displayName || 'Guest',
+          authorPhoto: avatar || null,
+          text: body,
+          createdAt: serverTimestamp(),
+        });
+        await updateDoc(doc(db, 'posts', post.id), { commentCount: increment(1) });
+      }
+      setText('');
+    } catch (err) {
+      console.error('comment failed', err);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const removeComment = async (c: any) => {
+    if (isSample) {
+      setComments((prev) => prev.filter((x) => x !== c));
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, 'posts', post.id, 'comments', c.id));
+      await updateDoc(doc(db, 'posts', post.id), { commentCount: increment(-1) });
+    } catch (err) {
+      console.error('comment delete failed', err);
+    }
+  };
+
+  const mutedCls = isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]';
+  const fmt = (c: any) => {
+    if (c.createdAt?.toDate) {
+      return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(c.createdAt.toDate());
+    }
+    return c.timeAgo || 'Just now';
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] bg-black/60 flex items-end justify-center" onClick={onClose}>
+      <div
+        className={`w-full max-w-[430px] max-h-[85vh] overflow-y-auto rounded-t-[24px] px-[18px] pt-5 pb-[calc(22px+env(safe-area-inset-bottom,0px))] ${isDarkMode ? 'bg-[#13232A]' : 'bg-[#F6F5FA]'}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="font-display text-[22px] font-medium leading-tight">Comments{comments.length > 0 ? ` (${comments.length})` : ''}</h3>
+        {comments.length === 0 ? (
+          <p className={`my-4 text-[0.9rem] ${mutedCls}`}>No comments yet. Start the conversation.</p>
+        ) : (
+          comments.map((c, i) => (
+            <div key={c.id || i} className="flex gap-2.5 my-3">
+              <div className="w-[34px] h-[34px] rounded-full flex items-center justify-center text-white text-[13px] font-bold shrink-0" style={{ background: avatarColor(c.authorName) }}>
+                {(c.authorName || 'G').charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[0.9rem]">
+                  <strong>{c.authorName || 'Guest'}</strong>
+                  <span className={`text-[0.75rem] ${mutedCls}`}> · {fmt(c)}</span>
+                </p>
+                <p className="text-[0.95rem] mt-0.5 whitespace-pre-wrap">{c.text}</p>
+                {(isAdmin || (user && c.authorUid === user.uid)) && (
+                  <button onClick={() => removeComment(c)} className="text-[13px] text-[#d23b3b] mt-1">Remove</button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+        <div className={`sticky bottom-0 flex items-center gap-2 pt-2 pb-1 ${isDarkMode ? 'bg-[#13232A]' : 'bg-[#F6F5FA]'}`}>
+          <div className="w-[34px] h-[34px] rounded-full bg-[#0E6B75] text-white flex items-center justify-center text-[13px] font-bold shrink-0 overflow-hidden">
+            {avatar ? <img src={avatar} className="w-full h-full object-cover" alt="" /> : <span>{(displayName || 'Y').charAt(0).toUpperCase()}</span>}
+          </div>
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+            placeholder="Add a comment…"
+            maxLength={500}
+            className={`flex-1 min-w-0 rounded-xl border px-3 py-2.5 text-[0.95rem] outline-none bg-transparent ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}
+          />
+          <button onClick={send} disabled={!text.trim() || sending} className="bg-[#0E6B75] text-white rounded-full px-4 py-2.5 font-semibold text-[0.9rem] disabled:opacity-40 shrink-0">Send</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
