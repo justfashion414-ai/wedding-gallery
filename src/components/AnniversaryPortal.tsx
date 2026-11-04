@@ -397,6 +397,29 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isAdminModalOpen, setIsAdminDashboardOpen] = useState(false);
+  const [route, setRoute] = useState<string>(() => window.location.pathname);
+  const goAdminPage = () => {
+    if (window.location.pathname !== '/admin') {
+      try { window.history.pushState({}, '', '/admin'); } catch {}
+    }
+    setRoute('/admin');
+    setIsAdminDashboardOpen(true);
+  };
+  const leaveAdminPage = () => {
+    setIsAdminDashboardOpen(false);
+    if (window.location.pathname !== '/') {
+      try { window.history.pushState({}, '', '/'); } catch {}
+    }
+    setRoute('/');
+  };
+  useEffect(() => {
+    const onPop = () => {
+      setRoute(window.location.pathname);
+      if (window.location.pathname !== '/admin') setIsAdminDashboardOpen(false);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [activeAccessCode, setActiveAccessCode] = useState<string | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
@@ -500,10 +523,20 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     } catch {}
   }, [isAdminModalOpen]);
   useEffect(() => {
+    if (route === '/admin' && user && !user.isAnonymous && isAdmin) setIsAdminDashboardOpen(true);
+  }, [route, user, isAdmin]);
+
+  useEffect(() => {
     if (!user || !isAdmin) return;
     try {
       const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null');
-      if (storedAdminUi && storedAdminUi.open) setIsAdminDashboardOpen(true);
+      if (storedAdminUi && storedAdminUi.open) {
+        setIsAdminDashboardOpen(true);
+        if (window.location.pathname !== '/admin') {
+          try { window.history.replaceState({}, '', '/admin'); } catch {}
+          setRoute('/admin');
+        }
+      }
     } catch {}
   }, [user, isAdmin]);
 
@@ -675,6 +708,10 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       if (timeLeft <= 0) {
         signOut(auth);
         setIsAdminDashboardOpen(false);
+        if (window.location.pathname !== '/') {
+          try { window.history.pushState({}, '', '/'); } catch {}
+          setRoute('/');
+        }
         setIsAdminSessionValid(false);
         showToast("Your admin session expired. Please sign in again.", "error");
       } else if (timeLeft < 120000 && !sessionWarningRef.current) {
@@ -718,7 +755,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         setIsAdmin(true);
         setAdminPermissions(snap.data().permissions);
         setMustSetPassword(!!snap.data().mustSetPassword);
-        if (!adminAutoOpenedRef.current) { adminAutoOpenedRef.current = true; setIsAdminDashboardOpen(true); }
+        if (!adminAutoOpenedRef.current) { adminAutoOpenedRef.current = true; goAdminPage(); }
       } else if (isSuper) {
         setMustSetPassword(false);
         setIsAdmin(true);
@@ -727,7 +764,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           canUploadImages: true, 
           canSetAccessCode: true 
         });
-        if (!adminAutoOpenedRef.current) { adminAutoOpenedRef.current = true; setIsAdminDashboardOpen(true); }
+        if (!adminAutoOpenedRef.current) { adminAutoOpenedRef.current = true; goAdminPage(); }
       } else {
         setIsAdmin(false);
         setAdminPermissions(null);
@@ -2168,7 +2205,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
               {isAdmin && (
                 <div className="pt-6 pb-2">
-                  <button onClick={() => setIsAdminDashboardOpen(true)} className="w-full py-4 rounded-[16px] bg-[#0E6B75] text-white text-[0.75rem] font-black uppercase tracking-widest">
+                  <button onClick={goAdminPage} className="w-full py-4 rounded-[16px] bg-[#0E6B75] text-white text-[0.75rem] font-black uppercase tracking-widest">
                     Open admin dashboard
                   </button>
                 </div>
@@ -2178,10 +2215,12 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         </AnimatePresence>
       </main>
 
-      {/* Admin Dashboard Modal */}
+      {/* Admin dashboard page (/admin) - separate page, not an overlay on the landing */}
+      {isAdminModalOpen && user && !user.isAnonymous && isAdmin && (
       <AdminDashboardModal 
         isOpen={isAdminModalOpen}
-        onClose={() => setIsAdminDashboardOpen(false)}
+        asPage={route === '/admin'}
+        onClose={leaveAdminPage}
         activeCode={activeAccessCode}
         onUpdateCode={updateAccessCode}
         posts={posts}
@@ -2282,6 +2321,23 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           }
         }}
       />
+      )}
+
+      {/* /admin sign-in screen for signed-out visitors */}
+      {route === '/admin' && !(user && !user.isAnonymous && isAdmin) && (
+        <AuthScreen
+          screen={authScreen ?? 'signin'}
+          setScreen={setAuthScreen}
+          onClose={leaveAdminPage}
+          onSignIn={handleAdminLogin}
+          onSignup={handleAdminSignup}
+          onForgot={handleForgotPassword}
+          busy={authBusy}
+          error={authError}
+          clearError={() => setAuthError('')}
+          isDarkMode={isDarkMode}
+        />
+      )}
 
       <DeleteConfirmationModal 
         isOpen={!!postToDelete}
@@ -4200,6 +4256,7 @@ function ForceSetPasswordScreen({ isDarkMode, busy, error, newPassword, setNewPa
 
 function AdminDashboardModal({ 
   isOpen, 
+  asPage, 
   onClose, 
   activeCode, 
   onUpdateCode, 
@@ -4454,6 +4511,7 @@ function AdminDashboardModal({
     <AnimatePresence>
       {isOpen && (
         <>
+          {!asPage && (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -4461,6 +4519,7 @@ function AdminDashboardModal({
             onClick={onClose}
             className="fixed inset-0 bg-black/60 z-[110] backdrop-blur-sm"
           />
+          )}
           <motion.div 
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
