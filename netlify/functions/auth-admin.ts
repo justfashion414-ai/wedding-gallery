@@ -124,81 +124,6 @@ async function adminDocExists(email: string): Promise<boolean> {
 }
 
 
-// TEMPORARY admin proxy (token-gated). Publishes the repo's Firestore rules
-// and can add a domain to the project's authorized domains. Remove after the
-// rules are live.
-const RULES_PROXY_TOKEN = String(process.env.RULES_PROXY_TOKEN || '');
-const RULES_SOURCE = "rules_version = '2';\n\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    // 1. HELPERS\n    function isSignedIn() {\n      return request.auth != null;\n    }\n\n    function isSessionValid() {\n      return isSignedIn() && \n             request.auth.token.auth_time != null &&\n             (request.time.toMillis() / 1000 - int(request.auth.token.auth_time) < 3600); // 1 hour\n    }\n\n    function isSuperAdmin() {\n      return isSignedIn() && (\n        request.auth.token.email == \"justfashion414@gmail.com\" ||\n        request.auth.uid == \"p8BAKdDJEaYYJy0lHuQtzyntynr1\"\n      );\n    }\n\n    function isAdmin() {\n      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.token.email)) && isSessionValid();\n    }\n\n    function getAdminData() {\n      return get(/databases/$(database)/documents/admins/$(request.auth.token.email)).data;\n    }\n\n    function isValidId(id) {\n      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\\\-]+$');\n    }\n\n    // 2. PUBLIC READ COLLECTIONS\n    match /app_config/{configId} {\n      allow read: if true;\n      allow write: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canSetAccessCode == true);\n    }\n\n    match /residents/{uid} {\n      allow read: if true;\n      allow write: if (isSignedIn() && request.auth.uid == uid && isValidId(uid)) || isSuperAdmin();\n    }\n\n    match /posts/{postId} {\n      allow read: if true;\n      allow create: if isSignedIn() && (\n        (request.resource.data.authorUid == request.auth.uid) ||\n        isSuperAdmin() || \n        (isAdmin() && getAdminData().permissions.canDeletePosts == true)\n      ) && (request.resource.data.text is string || request.resource.data.mediaUrls is list);\n      allow update: if isSuperAdmin() || \n                       (isAdmin() && getAdminData().permissions.canDeletePosts == true) || \n                       (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'loveCount', 'commentCount', 'reports']));\n      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);\n\n      match /reactions/{userId} {\n        allow read: if isSignedIn();\n        allow write: if isSignedIn() && request.auth.uid == userId && \n                      request.resource.data.keys().hasOnly(['like', 'love', 'updatedAt']) &&\n                      (request.resource.data.get('like', false) is bool) &&\n                      (request.resource.data.get('love', false) is bool);\n      }\n\n      match /comments/{commentId} {\n        allow read: if true;\n        allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid &&\n                      request.resource.data.text is string &&\n                      request.resource.data.text.size() > 0 &&\n                      request.resource.data.text.size() <= 500;\n        allow update: if false;\n        allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true) ||\n                      (isSignedIn() && resource.data.authorUid == request.auth.uid);\n      }\n    }\n\n    match /{path=**}/reactions/{userId} {\n      allow read: if isSignedIn() && request.auth.uid == userId;\n    }\n\n    match /admins/{email} {\n      allow read: if isSignedIn();\n      allow write: if isSuperAdmin();\n    }\n\n    match /deleted_posts/{postId} {\n      allow read: if isSuperAdmin() || isAdmin();\n      allow create: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);\n      allow update: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);\n      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);\n    }\n\n    // 3. GLOBAL SAFETY NET (Last match wins if others don't allow)\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}\n";
-
-async function publishRules(): Promise<{ rulesetName: string; releaseName: string }> {
-  const token = await getAccessToken();
-  const createRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/rulesets`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ source: { files: [{ name: 'firestore.rules', content: RULES_SOURCE }] } })
-  });
-  const created = await createRes.json().catch(() => ({}));
-  if (!createRes.ok) throw new Error(`ruleset create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 400)}`);
-  const rulesetName = created.name;
-  const releasePath = `projects/${PROJECT_ID}/releases/cloud.firestore`;
-  const variants: Array<{ mask: string; body: any }> = [
-    { mask: 'ruleset_name', body: { release: { name: releasePath, rulesetName } } },
-    { mask: 'ruleset_name', body: { name: releasePath, rulesetName } },
-    { mask: 'release.rulesetName', body: { release: { name: releasePath, rulesetName } } }
-  ];
-  const patchRelease = (variant: { mask: string; body: any }) => fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore?updateMask=${variant.mask}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify(variant.body)
-  });
-  let relRes = await patchRelease(variants[0]);
-  let lastDetail = '';
-  for (const variant of variants) {
-    relRes = await patchRelease(variant);
-    const errJson = await relRes.clone().json().catch(() => ({}));
-    if (relRes.ok) break;
-    lastDetail = JSON.stringify(errJson).slice(0, 400);
-    // A 404 here means the release does not exist yet; create it below.
-    if (relRes.status !== 400) break;
-  }
-  let releaseName: string | undefined;
-  if (!relRes.ok) {
-    // A project that has never published rules has no release yet; create it.
-    const createRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name: releasePath, rulesetName })
-    });
-    const created = await createRes.json().catch(() => ({}));
-    if (createRes.ok) {
-      releaseName = created.name;
-    } else {
-      relRes = await patchRelease(variants[0]);
-      const retried = await relRes.json().catch(() => ({}));
-      if (!relRes.ok) throw new Error(`release update failed: ${relRes.status} ${JSON.stringify(retried).slice(0, 400)}; create failed: ${createRes.status} ${JSON.stringify(created).slice(0, 200)}`);
-      releaseName = retried.name;
-    }
-  }
-  return { rulesetName, releaseName: releaseName || `projects/${PROJECT_ID}/releases/cloud.firestore` };
-}
-
-async function addAuthorizedDomain(domain: string): Promise<{ ok: boolean; detail: string }> {
-  const token = await getAccessToken();
-  const cfgUrl = `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT_ID}/config`;
-  const getRes = await fetch(cfgUrl, { headers: { Authorization: `Bearer ${token}` } });
-  const current = await getRes.json().catch(() => ({}));
-  if (!getRes.ok) return { ok: false, detail: `config read failed: ${getRes.status} ${JSON.stringify(current).slice(0, 300)}` };
-  const domains: string[] = Array.isArray(current.authorizedDomains) ? current.authorizedDomains : [];
-  if (domains.includes(domain)) return { ok: true, detail: 'already authorized' };
-  const patchRes = await fetch(`${cfgUrl}?updateMask=authorizedDomains`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ authorizedDomains: [...domains, domain] })
-  });
-  const patched = await patchRes.json().catch(() => ({}));
-  return { ok: patchRes.ok, detail: patchRes.ok ? 'added' : `update failed: ${patchRes.status} ${JSON.stringify(patched).slice(0, 300)}` };
-}
-
 const json = (statusCode: number, body: any) => ({
   statusCode,
   headers: {
@@ -221,25 +146,6 @@ export const handler = async (event: any) => {
     return json(400, { error: 'Invalid JSON body' });
   }
 
-  // TEMPORARY token-gated proxy actions (see note above RULES_SOURCE).
-  const proxyHeader = event.headers.authorization || event.headers.Authorization || '';
-  const proxyToken = proxyHeader.startsWith('Bearer ') ? proxyHeader.slice(7) : '';
-  if (body.action === 'publish-rules' || body.action === 'add-domain') {
-    if (!RULES_PROXY_TOKEN) return json(503, { error: 'Proxy token is not configured' });
-    if (!proxyToken || proxyToken !== RULES_PROXY_TOKEN) return json(403, { error: 'Invalid proxy token' });
-    try {
-      if (body.action === 'publish-rules') {
-        const result = await publishRules();
-        return json(200, { ok: true, ...result });
-      }
-      const domain = String(body.domain || '').trim().toLowerCase();
-      if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return json(400, { error: 'A valid domain is required' });
-      const result = await addAuthorizedDomain(domain);
-      return json(result.ok ? 200 : 500, { ok: result.ok, detail: result.detail });
-    } catch (err: any) {
-      return json(500, { error: String(err?.message || err).slice(0, 400) });
-    }
-  }
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
 
