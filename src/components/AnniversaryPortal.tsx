@@ -4414,12 +4414,12 @@ function AdminDashboardModal({
 
   const [dangerText, setDangerText] = useState('');
   const [deleteAllBusy, setDeleteAllBusy] = useState(false);
-  const modTotal = pendCount + reportCount + vendorRequests.length;
   const [postTypeFilter, setPostTypeFilter] = useState<string>('all');
   const nowHour = new Date().getHours();
   const greeting = nowHour < 12 ? 'Good morning' : nowHour < 17 ? 'Good afternoon' : 'Good evening';
   const pendCount = posts.filter((p: any) => p.pending).length;
   const reportCount = posts.filter((p: any) => ((p as any).reports || 0) > 0).length;
+  const modTotal = pendCount + reportCount + vendorRequests.length;
   const relTime = (d: Date | null) => {
     if (!d) return 'just now';
     const s = Math.floor((Date.now() - d.getTime()) / 1000);
