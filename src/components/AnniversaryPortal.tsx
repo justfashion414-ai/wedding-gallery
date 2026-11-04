@@ -23,6 +23,7 @@ import {
   Play,
   Pause,
   ChevronLeft,
+  Menu,
   ChevronRight,
   ExternalLink,
   MessageSquare,
@@ -3895,6 +3896,7 @@ function AdminDashboardModal({
   const [isDirty, setIsDirty] = useState(false);
   const [isBulkUploading, setIsBulkUploading] = useState(false);
   const [activeAdminTab, setActiveAdminTab] = useState('overview');
+  const [mobileAdminNavOpen, setMobileAdminNavOpen] = useState(false);
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('vendor');
@@ -4039,32 +4041,71 @@ function AdminDashboardModal({
             className={`fixed inset-0 z-[111] p-0 shadow-2xl overflow-hidden flex flex-col ${isDarkMode ? 'bg-[#13232A]' : 'bg-white'}`}
           >
             {/* Couple dashboard shell */}
-            <div className="flex flex-1 min-h-0 w-full flex-col md:flex-row">
-              {/* Mobile top nav */}
-              <div className="md:hidden flex items-center gap-2 overflow-x-auto px-4 py-3 bg-[#0B171C] shrink-0">
-                <p className="font-display text-white text-base font-medium mr-1 shrink-0">Dara &amp; Femi</p>
-                {[
-                  { id: 'overview', label: 'Overview', icon: Home },
-                  { id: 'moderation', label: 'Moderation', icon: ShieldCheck },
-                  { id: 'posts', label: 'Posts', icon: Film },
-                  { id: 'events', label: 'Events', icon: Calendar },
-                  { id: 'hero', label: 'Hero photos', icon: ImageIcon },
-                  { id: 'guests', label: 'Guests', icon: Users },
-                  { id: 'settings', label: 'Settings', icon: Settings },
-                  { id: 'ads', label: 'Ads', icon: Megaphone },
-                  { id: 'admins', label: 'Admins', icon: Users },
-                  { id: 'recycle', label: 'Bin', icon: Trash },
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveAdminTab(tab.id)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-[0.7rem] font-black uppercase tracking-widest whitespace-nowrap shrink-0 ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white' : 'bg-white/10 text-white/70'}`}
-                  >
-                    <tab.icon className="w-3.5 h-3.5" />
-                    <span>{tab.label}</span>
-                  </button>
-                ))}
+            <div className="relative flex flex-1 min-h-0 w-full flex-col md:flex-row">
+              {/* Mobile top bar with sidebar toggle */}
+              <div className="md:hidden relative flex items-center gap-2 px-4 py-3 bg-[#0B171C] shrink-0">
+                <button onClick={() => setMobileAdminNavOpen(true)} className="p-2 rounded-xl bg-white/10 text-white active:bg-white/20" aria-label="Open menu">
+                  <Menu className="w-5 h-5" />
+                </button>
+                <p className="font-display text-white text-base font-medium">Dara &amp; Femi</p>
                 <button onClick={onClose} className="ml-auto shrink-0 p-2 rounded-full bg-white/10 text-white" aria-label="Close dashboard"><X className="w-4 h-4" /></button>
+
+                {/* Slide-in sidebar (mobile) */}
+                {mobileAdminNavOpen && (
+                  <div className="absolute inset-0 z-[120] flex" onClick={() => setMobileAdminNavOpen(false)}>
+                    <div className="absolute inset-0 bg-black/50" />
+                    <div
+                      className="relative w-[264px] max-w-[80vw] h-full bg-[#0B171C] text-white p-5 overflow-y-auto shadow-2xl"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="mb-6">
+                        <p className="font-display text-[1.25rem] font-medium">Dara &amp; Femi</p>
+                        <p className="text-[0.66rem] uppercase tracking-widest text-white/40 font-black mt-0.5">Couple dashboard</p>
+                      </div>
+                      <nav className="flex flex-col gap-1">
+                        {[
+                          { id: 'overview', label: 'Overview', icon: Home },
+                          { id: 'moderation', label: 'Moderation', icon: ShieldCheck },
+                          { id: 'posts', label: 'All posts', icon: Film },
+                          { id: 'events', label: 'Events & details', icon: Calendar },
+                          { id: 'hero', label: 'Hero photos', icon: ImageIcon },
+                          { id: 'guests', label: 'Guests & vendors', icon: Users },
+                          { id: 'settings', label: 'Settings', icon: Settings },
+                        ].map((tab) => (
+                          <button
+                            key={tab.id}
+                            onClick={() => { setActiveAdminTab(tab.id); setMobileAdminNavOpen(false); }}
+                            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-left transition-all ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white shadow-lg' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+                          >
+                            <tab.icon className="w-[18px] h-[18px] shrink-0" />
+                            <span>{tab.label}</span>
+                          </button>
+                        ))}
+                      </nav>
+                      <p className="mt-5 mb-1 px-3 text-[0.62rem] uppercase tracking-widest text-white/30 font-black">More</p>
+                      <nav className="flex flex-col gap-1">
+                        {[
+                          { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper },
+                          { id: 'admins', label: 'Admins', icon: Users, show: isSuper },
+                          { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions?.canDeletePosts },
+                        ].filter((t) => t.show).map((tab) => (
+                          <button
+                            key={tab.id}
+                            onClick={() => { setActiveAdminTab(tab.id); setMobileAdminNavOpen(false); }}
+                            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-left transition-all ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white shadow-lg' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+                          >
+                            <tab.icon className="w-[18px] h-[18px] shrink-0" />
+                            <span>{tab.label}</span>
+                          </button>
+                        ))}
+                      </nav>
+                      <button onClick={() => setMobileAdminNavOpen(false)} className="mt-4 flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-white/60 hover:bg-white/10 hover:text-white text-left">
+                        <X className="w-[18px] h-[18px] shrink-0" />
+                        <span>Close menu</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Sidebar (desktop) */}
