@@ -54,7 +54,8 @@ import {
   serverTimestamp,
   writeBatch,
   increment,
-  updateDoc
+  updateDoc,
+  getDocs
 } from 'firebase/firestore';
 
 
@@ -145,6 +146,8 @@ interface WeddingEvent {
   date: string; // YYYY-MM-DD
   time?: string; // 24h HH:MM
   desc: string;
+  venue?: string;
+  status?: 'done' | 'next' | 'up';
 }
 
 const WEDDING_DATE = '2026-12-12';
@@ -161,20 +164,35 @@ const EVENTS_DATA: WeddingEvent[] = [
   { id: 'thanks', name: 'Thanksgiving', type: 'Thanksgiving service', date: '2026-12-13', desc: 'We close the weekend giving thanks together.' },
 ];
 
-const JOURNEY_STATES: string[] = (() => {
+// Journey status is SET BY THE COUPLE in the dashboard (Done / Next up / Upcoming).
+// This helper only seeds statuses the first time the config is written; it is
+// never used to compute what guests see at render time.
+const seedEventStatuses = (): Record<string, 'done' | 'next' | 'up'> => {
   const now = Date.now();
   let nextFound = false;
-  return EVENTS_DATA.map((e) => {
+  const out: Record<string, 'done' | 'next' | 'up'> = {};
+  EVENTS_DATA.forEach((e) => {
     const t = new Date(`${e.date}T${e.time || '12:00'}:00`).getTime();
-    if (t < now) return 'done';
-    if (!nextFound) { nextFound = true; return 'next'; }
-    return 'todo';
+    if (t < now) { out[e.id] = 'done'; return; }
+    if (!nextFound) { nextFound = true; out[e.id] = 'next'; return; }
+    out[e.id] = 'up';
   });
-})();
+  return out;
+};
 
-const JOURNEY_DATES: string[] = EVENTS_DATA.map((e) =>
-  new Date(`${e.date}T${e.time || '12:00'}:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
-);
+const fmtEventDate = (e: { date: string; time?: string }) =>
+  new Date(`${e.date}T${e.time || '12:00'}:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+const DEFAULT_STORY = "Dara and Femi met at a friend's book launch in 2022. Four years, two families and one very patient pastor later, here we are. This page keeps every moment of it in one place, for life.";
+
+const DEFAULT_DETAILS = {
+  churchTime: '11:00 am',
+  churchVenue: 'Redeemed Chapel, Ikeja, Lagos',
+  receptionTime: '3:00 pm',
+  receptionVenue: 'The Grand Hall, Victoria Island, Lagos',
+  asoEbi: 'emerald green and gold',
+  hashtag: '#DaraAndFemi2026',
+};
 
 // Local placeholder photos used until real ones are uploaded (hero + footer grid)
 const PLACEHOLDER_IMAGES = [
@@ -389,6 +407,15 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     setTimeout(() => setToast(null), 3000);
   };
 
+  const [cfgEvents, setCfgEvents] = useState<WeddingEvent[] | null>(null);
+  const [cfgStory, setCfgStory] = useState<string | null>(null);
+  const [cfgDetails, setCfgDetails] = useState<any>(null);
+  const [archiveMode, setArchiveMode] = useState<boolean>(false);
+  const [blockedUids, setBlockedUids] = useState<string[]>([]);
+  const [vendors, setVendors] = useState<any[]>([]);
+  const [residents, setResidents] = useState<any[]>([]);
+  const [approveGuestPosts, setApproveGuestPosts] = useState<boolean>(true);
+  const [pushEnabled, setPushEnabled] = useState<boolean>(true);
   const [adminPermissions, setAdminPermissions] = useState<any>(null);
   const [deletedPosts, setDeletedPosts] = useState<any[]>([]);
   const [allAdmins, setAllAdmins] = useState<any[]>([]);
@@ -793,6 +820,14 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
             // Ignore storage quota error
           }
         }
+        if (Array.isArray(data.events) && data.events.length) setCfgEvents(data.events);
+        if (typeof data.story === 'string' && data.story.trim()) setCfgStory(data.story);
+        if (data.weddingDetails && typeof data.weddingDetails === 'object') setCfgDetails(data.weddingDetails);
+        if (typeof data.archiveMode === 'boolean') setArchiveMode(data.archiveMode);
+        if (Array.isArray(data.blockedUids)) setBlockedUids(data.blockedUids);
+        if (Array.isArray(data.vendors)) setVendors(data.vendors);
+        if (typeof data.approveGuestPosts === 'boolean') setApproveGuestPosts(data.approveGuestPosts);
+        if (typeof data.pushEnabled === 'boolean') setPushEnabled(data.pushEnabled);
         if (Array.isArray(data.postAds)) {
           setPostAds(data.postAds);
           const copy = [...data.postAds];
@@ -821,6 +856,19 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     return () => unsub();
   }, []);
 
+  // 2c. Residents (guest profiles + vendor requests). Public read per rules.
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'residents'), (snap) => {
+      const arr: any[] = [];
+      snap.forEach((d) => arr.push({ uid: d.id, ...d.data() }));
+      setResidents(arr);
+    }, (err) => {
+      console.error('Residents sync error:', err);
+      setResidents([]);
+    });
+    return () => unsub();
+  }, []);
+
   // 2b. Initialize Config (Admin only)
   useEffect(() => {
     if (!isAdmin || !isAdminSessionValid) return;
@@ -829,10 +877,19 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       try {
         const snap = await getDoc(doc(db, 'app_config', 'main'));
         if (!snap.exists()) {
-          await setDoc(doc(db, 'app_config', 'main'), { 
+          await setDoc(doc(db, 'app_config', 'main'), {
             activeAccessCode: 'DARAFEMI26',
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            events: EVENTS_DATA.map((e) => ({ ...e, status: seedEventStatuses()[e.id] })),
+            story: DEFAULT_STORY,
+            weddingDetails: DEFAULT_DETAILS
           });
+        } else if (!Array.isArray(snap.data().events)) {
+          await setDoc(doc(db, 'app_config', 'main'), {
+            events: EVENTS_DATA.map((e) => ({ ...e, status: seedEventStatuses()[e.id] })),
+            story: snap.data().story || DEFAULT_STORY,
+            weddingDetails: snap.data().weddingDetails || DEFAULT_DETAILS
+          }, { merge: true });
         }
 
       } catch (err) {
@@ -964,6 +1021,13 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
   const handleLogout = () => signOut(auth);
 
+  // Derived wedding content: Firestore values when the couple has saved them,
+  // seeded defaults before their first save.
+  const EVENTS: WeddingEvent[] = cfgEvents && cfgEvents.length ? cfgEvents : EVENTS_DATA;
+  const STORY: string = cfgStory && cfgStory.trim() ? cfgStory : DEFAULT_STORY;
+  const DETAILS: any = cfgDetails || DEFAULT_DETAILS;
+  const vendorRequests = residents.filter((r: any) => r?.vendorRequest && r.vendorRequest.status === 'pending');
+
   const updateAccessCode = async (newCode: string) => {
     if (!isAdmin || !adminPermissions?.canSetAccessCode) return;
     const normalized = normalizeCode(newCode);
@@ -981,6 +1045,130 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       console.error("Update code error:", err);
       showToast('Failed to update access code.', 'error');
     }
+  };
+
+  const updateWedding = async (events: WeddingEvent[], story: string, details: any) => {
+    if (!isAdmin || !isAdminSessionValid) return;
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), {
+        events,
+        story,
+        weddingDetails: details,
+        lastUpdated: serverTimestamp()
+      }, { merge: true });
+      setCfgEvents(events);
+      setCfgStory(story);
+      setCfgDetails(details);
+      showToast('Saved. Guests see this on the Home screen.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      console.error('Update wedding details error:', err);
+      showToast('Failed to save changes.', 'error');
+    }
+  };
+
+  const updatePeople = async (patch: { vendors?: string[]; blockedUids?: string[] }) => {
+    if (!isAdmin || !adminPermissions?.canSetAccessCode) { showToast('You do not have permission for that.', 'error'); return; }
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), { ...patch, lastUpdated: serverTimestamp() }, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Failed to update.', 'error');
+    }
+  };
+
+  const handleVendorRequest = async (uid: string, name: string, approve: boolean) => {
+    if (!isAdmin || !adminPermissions?.canSetAccessCode) { showToast('You do not have permission for that.', 'error'); return; }
+    try {
+      const next = approve ? Array.from(new Set([...(vendors || []), uid])) : (vendors || []).filter((u: any) => u !== uid);
+      await setDoc(doc(db, 'app_config', 'main'), { vendors: next, lastUpdated: serverTimestamp() }, { merge: true });
+      try {
+        await updateDoc(doc(db, 'residents', uid), { vendorRequest: { status: approve ? 'approved' : 'declined', decidedAt: serverTimestamp() } });
+      } catch (err: any) {
+        console.error('Vendor request status update needs superadmin:', err?.message || err);
+      }
+      showToast(approve ? `${name} is now an official vendor.` : 'Request declined.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Could not update the vendor request.', 'error');
+    }
+  };
+
+  const updateAppConfigFlags = async (patch: Record<string, any>, okMsg = 'Setting saved.') => {
+    if (!isAdmin || !adminPermissions?.canSetAccessCode) { showToast('You do not have permission for that.', 'error'); return; }
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), { ...patch, lastUpdated: serverTimestamp() }, { merge: true });
+      showToast(okMsg);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Failed to save the setting.', 'error');
+    }
+  };
+
+  const deleteAllGuestData = async () => {
+    if (!isAdmin || !adminPermissions?.canDeletePosts) { showToast('You do not have permission to delete posts.', 'error'); return; }
+    try {
+      const snap = await getDocs(collection(db, 'posts'));
+      let n = 0;
+      for (const d of snap.docs) {
+        await deleteDoc(doc(db, 'posts', d.id));
+        n += 1;
+      }
+      showToast(`Deleted ${n} ${n === 1 ? 'post' : 'posts'}.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'posts');
+      showToast('Could not delete everything.', 'error');
+    }
+  };
+
+  const downloadEverything = async () => {
+    if (!posts.length) { showToast('Nothing to download yet.'); return; }
+    try {
+      showToast('Preparing your zip…');
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      let n = 0;
+      for (const p of posts) {
+        const evName = (EVENTS.find((e) => e.id === p.eventId)?.name || 'Other memories').replace(/[^\w -]/g, '').trim() || 'Other memories';
+        const folder = zip.folder(evName) || zip;
+        const urls: string[] = Array.isArray(p.mediaUrls) ? p.mediaUrls : (p.mediaUrl ? [p.mediaUrl] : []);
+        for (const u of urls) {
+          try {
+            const res = await fetch(u);
+            if (!res.ok) continue;
+            const blob = await res.blob();
+            const ext = (u.split('?')[0].split('.').pop() || 'jpg').slice(0, 5);
+            folder.file(`${(p.authorName || 'guest').replace(/[^\w -]/g, '') || 'guest'}-${p.id}-${n}.${ext}`, blob);
+            n += 1;
+          } catch { /* skip a file that will not fetch */ }
+        }
+        if (!urls.length && (p.text || p.caption)) folder.file(`${p.id}.txt`, String(p.text || p.caption));
+      }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'dara-femi-memories.zip';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      showToast(`Downloaded ${n} ${n === 1 ? 'file' : 'files'}.`);
+    } catch (err) {
+      console.error('Download everything failed:', err);
+      showToast('Could not build the zip. Try again on a desktop browser.', 'error');
+    }
+  };
+
+  const createMemoryBook = () => {
+    const win = window.open('', '_blank');
+    if (!win) { showToast('Allow pop-ups to create the memory book.', 'error'); return; }
+    const esc = (s: any) => String(s || '').replace(/[&<>"]/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+    const cards = posts.slice(0, 200).map((p: any) => {
+      const evName = EVENTS.find((e) => e.id === p.eventId)?.name || '';
+      const img = p.mediaUrls && p.mediaUrls[0] ? `<img src="${esc(p.mediaUrls[0])}" alt="" />` : '';
+      const txt = p.text || p.caption || '';
+      return `<section class="card"><header><b>${esc(p.authorName || 'A guest')}</b><span>${esc(evName)}</span></header>${img}<p>${esc(txt)}</p></section>`;
+    }).join('');
+    win.document.write(`<!doctype html><html><head><title>Dara &amp; Femi memory book</title><style>body{font-family:Georgia,serif;max-width:720px;margin:0 auto;padding:32px;color:#14262D}h1{font-size:34px;margin:0}p.sub{color:#5A6970;font-family:Arial,sans-serif;margin:6px 0 28px}.card{border:1px solid #DAD8E3;border-radius:14px;padding:16px;margin-bottom:18px;page-break-inside:avoid}.card header{display:flex;justify-content:space-between;font-family:Arial,sans-serif;margin-bottom:8px}.card header span{color:#0E6B75;font-size:12px;text-transform:uppercase;letter-spacing:1px}.card img{width:100%;border-radius:10px;margin-bottom:8px}.card p{margin:0;line-height:1.5}</style></head><body><h1>Dara &amp; Femi</h1><p class="sub">Wedding memories &middot; ${esc(DETAILS.hashtag)}</p>${cards}</body></html>`);
+    win.document.close();
   };
 
   // Delete Post (Move to Recycle Bin)
@@ -1286,7 +1474,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           }
           aria-hidden={activeTab !== 'home'}
         >
-           <FloatingHeroSection isDarkMode={isDarkMode} images={heroImages} />
+           <FloatingHeroSection isDarkMode={isDarkMode} images={heroImages} eventNames={EVENTS.map((e) => e.name)} />
         </div>
 
         {/* TOAST NOTIFICATION */}
@@ -1399,7 +1587,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               <section className="mt-8">
                 <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Our story</h2>
                 <p className={`text-[0.95rem] leading-relaxed m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
-                  Dara and Femi met at a friend&apos;s book launch in 2022. Four years, two families and one very patient pastor later, here we are. This page keeps every moment of it in one place, for life.
+                  {STORY}
                 </p>
                 <div className={`p-[16px_18px] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                   <strong className="block mb-0.5 text-[0.93rem]">How to share</strong>
@@ -1414,8 +1602,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_4px] leading-[1.25]">The journey</h2>
                 <p className={`text-[0.9rem] m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Tap any event to see its memories.</p>
                 <div className="ml-[10px] pl-[20px] border-l-[3px] border-[#DAD8E3] dark:border-[#22363E] space-y-3">
-                  {EVENTS_DATA.map((e, i) => {
-                    const st = JOURNEY_STATES[i];
+                  {EVENTS.map((e) => {
+                    const st = e.status || 'up';
                     const cnt = posts.filter((p: any) => p?.eventId === e.id).length;
                     const tagCls = st === 'done'
                       ? 'bg-[#0E6B75]/10 text-[#0E6B75] border-[#0E6B75]/30'
@@ -1437,10 +1625,10 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                               {st === 'done' ? 'Done' : st === 'next' ? 'Next up' : 'Upcoming'}
                             </span>
                           </div>
-                          <small className={`block text-[0.78rem] mt-0.5 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.type} · {JOURNEY_DATES[i]}</small>
+                          <small className={`block text-[0.78rem] mt-0.5 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.type ? `${e.type} · ` : ''}{fmtEventDate(e)}</small>
                           <p className={`text-[0.9rem] m-0 mt-1.5 leading-snug ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.desc}</p>
                           <small className={`block text-[0.72rem] font-bold uppercase tracking-wider mt-2 ${st === 'next' ? 'text-[#C8932A]' : 'text-[#0E6B75]'}`}>
-                            {cnt > 0 ? `${cnt} ${cnt === 1 ? 'memory' : 'memories'} shared` : 'Be the first to share'}
+                            {cnt > 0 ? `See ${cnt} ${cnt === 1 ? 'memory' : 'memories'}` : 'Be the first to share'}
                           </small>
                         </div>
                       </button>
@@ -1455,18 +1643,18 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 <p className={`text-[0.9rem] m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Saturday, 12 December 2026</p>
                 <div className={`p-[16px_18px] rounded-[20px] border space-y-3.5 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                   <div>
-                    <strong className="block text-[0.93rem]">Church wedding · 11:00 am</strong>
-                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Redeemed Chapel, Ikeja, Lagos</p>
+                    <strong className="block text-[0.93rem]">Church wedding · {DETAILS.churchTime}</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{DETAILS.churchVenue}</p>
                   </div>
                   <div className={`border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`} />
                   <div>
-                    <strong className="block text-[0.93rem]">Reception · 3:00 pm</strong>
-                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>The Grand Hall, Victoria Island, Lagos</p>
+                    <strong className="block text-[0.93rem]">Reception · {DETAILS.receptionTime}</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{DETAILS.receptionVenue}</p>
                   </div>
                   <div className={`border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`} />
                   <div>
-                    <strong className="block text-[0.93rem]">Aso-ebi: emerald green and gold</strong>
-                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Share your looks with <span className="font-bold text-[#0E6B75] dark:text-[#2FB3BF]">#DaraAndFemi2026</span></p>
+                    <strong className="block text-[0.93rem]">Aso-ebi: {DETAILS.asoEbi}</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Share your looks with <span className="font-bold text-[#0E6B75] dark:text-[#2FB3BF]">{DETAILS.hashtag}</span></p>
                   </div>
                 </div>
               </section>
@@ -1942,6 +2130,22 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         onUpdateCode={updateAccessCode}
         posts={posts}
         videoOrientations={videoOrientations}
+        events={EVENTS}
+        story={STORY}
+        weddingDetails={DETAILS}
+        onSaveWedding={updateWedding}
+        vendors={vendors}
+        blockedUids={blockedUids}
+        vendorRequests={vendorRequests}
+        onUpdatePeople={updatePeople}
+        onVendorAction={handleVendorRequest}
+        approveGuestPosts={approveGuestPosts}
+        pushEnabled={pushEnabled}
+        archiveMode={archiveMode}
+        onUpdateAppFlags={updateAppConfigFlags}
+        onDownloadEverything={downloadEverything}
+        onCreateMemoryBook={createMemoryBook}
+        onDeleteAllGuestData={deleteAllGuestData}
         onDeletePost={(id: string) => {
           setIsAdminDashboardOpen(false);
           setPostToDelete(id);
@@ -2183,6 +2387,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 <button 
                   disabled={(!newPostText.trim() && attachedMedia.length === 0) || !accessCode.trim() || isPosting || !configLoaded || !activeAccessCode}
                   onClick={async () => {
+                    if (archiveMode) { showToast('This wedding is archived. New posts are turned off.', 'error'); return; }
                     if (normalizeCode(accessCode) === normalizeCode(activeAccessCode ?? '')) {
                       setIsPosting(true);
                       try {
@@ -2229,6 +2434,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           mediaUrls: finalMediaUrls,
                           mediaTypes: finalMediaTypes,
                           ...(postVideoOrientation ? { videoOrientation: postVideoOrientation } : {}),
+                          pending: approveGuestPosts && !(vendors || []).includes(user.uid) && !isAdmin,
                           likeCount: 0,
                           loveCount: 0,
                           timestamp: serverTimestamp()
@@ -2244,7 +2450,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           setFeedSubTab('post');
                         }
                         
-                        showToast('Memory shared successfully!');
+                        showToast(approveGuestPosts && !(vendors || []).includes(user.uid) && !isAdmin ? 'Shared. Waiting for the couple to approve' : 'Memory shared successfully!');
 
                       } catch (err) {
                         console.error("Post error:", err);
@@ -3919,6 +4125,22 @@ function AdminDashboardModal({
   currentUserEmail,
   adminPermissions,
   videoOrientations,
+  events,
+  story,
+  weddingDetails,
+  onSaveWedding,
+  vendors,
+  blockedUids,
+  vendorRequests,
+  onUpdatePeople,
+  onVendorAction,
+  approveGuestPosts,
+  pushEnabled,
+  archiveMode,
+  onUpdateAppFlags,
+  onDownloadEverything,
+  onCreateMemoryBook,
+  onDeleteAllGuestData,
   showToast,
   onBackToMain,
   postAds = [],
@@ -4033,6 +4255,29 @@ function AdminDashboardModal({
 
   const [modQueue, setModQueue] = useState<'pending' | 'reports' | 'vendors'>('pending');
   const [postEventFilter, setPostEventFilter] = useState<string>('all');
+
+  const [evDraft, setEvDraft] = useState<WeddingEvent[]>(events);
+  const [storyDraft, setStoryDraft] = useState<string>(story);
+  const [detDraft, setDetDraft] = useState<any>(weddingDetails);
+  const [weddingBusy, setWeddingBusy] = useState(false);
+  useEffect(() => { setEvDraft(events); }, [events]);
+  useEffect(() => { setStoryDraft(story); }, [story]);
+  useEffect(() => { setDetDraft(weddingDetails); }, [weddingDetails]);
+
+  const inputCls = `w-full p-3.5 rounded-xl border-none outline-none font-bold text-sm ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`;
+
+  const saveWedding = async () => {
+    setWeddingBusy(true);
+    try {
+      await onSaveWedding(evDraft, storyDraft, detDraft);
+    } finally {
+      setWeddingBusy(false);
+    }
+  };
+
+  const [dangerText, setDangerText] = useState('');
+  const [deleteAllBusy, setDeleteAllBusy] = useState(false);
+  const modTotal = pendCount + reportCount + vendorRequests.length;
   const [postTypeFilter, setPostTypeFilter] = useState<string>('all');
   const nowHour = new Date().getHours();
   const greeting = nowHour < 12 ? 'Good morning' : nowHour < 17 ? 'Good afternoon' : 'Good evening';
@@ -4170,7 +4415,7 @@ function AdminDashboardModal({
                       <nav className="flex flex-col gap-1">
                         {[
                           { id: 'overview', label: 'Overview', icon: Home },
-                          { id: 'moderation', label: 'Moderation', icon: ShieldCheck },
+                          { id: 'moderation', label: 'Moderation', icon: ShieldCheck, badge: modTotal },
                           { id: 'posts', label: 'All posts', icon: Film },
                           { id: 'events', label: 'Events & details', icon: Calendar },
                           { id: 'hero', label: 'Hero photos', icon: ImageIcon },
@@ -4184,6 +4429,8 @@ function AdminDashboardModal({
                           >
                             <tab.icon className="w-[18px] h-[18px] shrink-0" />
                             <span>{tab.label}</span>
+                      {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
+                            {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
                           </button>
                         ))}
                       </nav>
@@ -4201,6 +4448,8 @@ function AdminDashboardModal({
                           >
                             <tab.icon className="w-[18px] h-[18px] shrink-0" />
                             <span>{tab.label}</span>
+                      {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
+                            {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
                           </button>
                         ))}
                       </nav>
@@ -4231,7 +4480,7 @@ function AdminDashboardModal({
                 <nav className="flex flex-col gap-1">
                   {[
                     { id: 'overview', label: 'Overview', icon: Home },
-                    { id: 'moderation', label: 'Moderation', icon: ShieldCheck },
+                    { id: 'moderation', label: 'Moderation', icon: ShieldCheck, badge: modTotal },
                     { id: 'posts', label: 'All posts', icon: Film },
                     { id: 'events', label: 'Events & details', icon: Calendar },
                     { id: 'hero', label: 'Hero photos', icon: ImageIcon },
@@ -4245,6 +4494,7 @@ function AdminDashboardModal({
                     >
                       <tab.icon className="w-[18px] h-[18px] shrink-0" />
                       <span>{tab.label}</span>
+                      {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
                     </button>
                   ))}
                 </nav>
@@ -4262,6 +4512,7 @@ function AdminDashboardModal({
                     >
                       <tab.icon className="w-[18px] h-[18px] shrink-0" />
                       <span>{tab.label}</span>
+                      {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
                     </button>
                   ))}
                 </nav>
@@ -4301,7 +4552,7 @@ function AdminDashboardModal({
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <h3 className="font-black font-display text-lg mb-3">Needs your attention</h3>
                     <div className="space-y-3">
-                      {([['pending', pendCount, 'post waiting for approval', 'posts waiting for approval'], ['reports', reportCount, 'reported item', 'reported items'], ['vendors', 0, 'vendor request', 'vendor requests']] as [string, number, string, string][]).map(([q, n, one, many]) => (
+                      {([['pending', pendCount, 'post waiting for approval', 'posts waiting for approval'], ['reports', reportCount, 'reported item', 'reported items'], ['vendors', vendorRequests.length, 'vendor request', 'vendor requests']] as [string, number, string, string][]).map(([q, n, one, many]) => (
                         <div key={q} className="flex items-center justify-between gap-3">
                           <div><b>{n}</b> {n === 1 ? one : many}</div>
                           <button onClick={() => { setActiveAdminTab('moderation'); setModQueue(q as 'pending' | 'reports' | 'vendors'); }} className={`px-4 py-2 rounded-full text-[0.7rem] font-black uppercase tracking-widest ${n ? 'bg-[#0E6B75] text-white' : 'border border-[#DAD8E3] opacity-60'}`}>{n ? 'Review' : 'All clear'}</button>
@@ -4355,7 +4606,7 @@ function AdminDashboardModal({
                     <p className="text-sm opacity-60 mt-0.5">Approve, reject and handle reports.</p>
                   </div>
                   <div className={`flex p-1 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#EEEDF3] border-[#DAD8E3]'}`}>
-                    {([['pending', `Posts (${pendCount})`], ['reports', `Reports (${reportCount})`], ['vendors', 'Vendor requests (0)']] as [string, string][]).map(([q, label]) => (
+                    {([['pending', `Posts (${pendCount})`], ['reports', `Reports (${reportCount})`], ['vendors', `Vendor requests (${vendorRequests.length})`]] as [string, string][]).map(([q, label]) => (
                       <button key={q} onClick={() => setModQueue(q as 'pending' | 'reports' | 'vendors')} className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${modQueue === q ? 'bg-[#0E6B75] text-white shadow-sm' : 'opacity-60 hover:opacity-100'}`}>{label}</button>
                     ))}
                   </div>
@@ -4405,9 +4656,27 @@ function AdminDashboardModal({
                     )
                   )}
                   {modQueue === 'vendors' && (
-                    <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                      <p className="opacity-50 text-sm">No pending vendor requests.</p>
-                    </div>
+                    vendorRequests.length === 0 ? (
+                      <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                        <p className="opacity-50 text-sm">No pending vendor requests. A guest asks by turning on &ldquo;I&rsquo;m an official vendor&rdquo; in their Settings.</p>
+                      </div>
+                    ) : (
+                      <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                        {vendorRequests.map((v: any) => (
+                          <div key={v.uid} className="flex items-center gap-3 p-4">
+                            <div className="w-11 h-11 rounded-2xl bg-[#C8932A]/15 text-[#C8932A] flex items-center justify-center font-black shrink-0">{(v.displayName || 'V').charAt(0).toUpperCase()}</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-[0.92rem] truncate">{v.displayName || 'A guest'}</p>
+                              <small className="block opacity-50 truncate">{v.vendorRequest?.why || 'Wants to post as an official vendor'}</small>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              <button onClick={() => onVendorAction(v.uid, v.displayName || 'A guest', true)} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest">Approve as vendor</button>
+                              <button onClick={() => onVendorAction(v.uid, v.displayName || 'A guest', false)} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Decline</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
                   )}
                 </div>
               )}
@@ -4421,7 +4690,7 @@ function AdminDashboardModal({
                   <div className="grid grid-cols-2 gap-3">
                     <select value={postEventFilter} onChange={(e) => setPostEventFilter(e.target.value)} aria-label="Filter by event" className={`p-3 rounded-xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] text-white' : 'bg-white border-[#DAD8E3] text-[#14262D]'} font-bold text-sm`}>
                       <option value="all">All events</option>
-                      {EVENTS_DATA.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                      {EVENTS.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
                     </select>
                     <select value={postTypeFilter} onChange={(e) => setPostTypeFilter(e.target.value)} aria-label="Filter by type" className={`p-3 rounded-xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] text-white' : 'bg-white border-[#DAD8E3] text-[#14262D]'} font-bold text-sm`}>
                       {['all', 'Photo', 'Video', 'Reel', 'Wish'].map((t) => <option key={t} value={t}>{t === 'all' ? 'All types' : t}</option>)}
@@ -4433,7 +4702,7 @@ function AdminDashboardModal({
                       if (filtered.length === 0) return <p className="p-5 opacity-50 text-sm">No posts match. Memories your guests share will show up here.</p>;
                       return filtered.map((p: any) => {
                         const t = postTypeOf(p);
-                        const evName = EVENTS_DATA.find((e) => e.id === p.eventId)?.name;
+                        const evName = EVENTS.find((e) => e.id === p.eventId)?.name;
                         const when = p.timestamp?.toDate ? p.timestamp.toDate() : (p.createdAt?.toDate ? p.createdAt.toDate() : null);
                         const media = (p.mediaUrls || [])[0];
                         return (
@@ -4466,31 +4735,76 @@ function AdminDashboardModal({
 
               {activeAdminTab === 'events' && (
                 <div className="space-y-6">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <h2 className="text-2xl font-black font-display tracking-tight">Events &amp; details</h2>
+                      <p className="text-sm opacity-60 mt-0.5">Set each event to Done, Next up or Upcoming. Guests see this on the Home timeline.</p>
+                    </div>
+                    <button onClick={saveWedding} disabled={weddingBusy} className={`px-5 py-3 rounded-full text-[0.7rem] font-black uppercase tracking-widest bg-[#0E6B75] text-white ${weddingBusy ? 'opacity-60' : ''}`}>
+                      {weddingBusy ? 'Saving…' : 'Save changes'}
+                    </button>
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Our story</h3>
+                    <textarea value={storyDraft} onChange={(e) => setStoryDraft(e.target.value)} rows={4} placeholder="How you met, in your own words." className={`w-full p-4 rounded-xl border-none outline-none text-sm leading-relaxed resize-y ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`} />
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Wedding day details</h3>
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      {([['churchTime', 'Church time'], ['churchVenue', 'Church venue'], ['receptionTime', 'Reception time'], ['receptionVenue', 'Reception venue'], ['asoEbi', 'Aso-ebi'], ['hashtag', 'Hashtag']] as [string, string][]).map(([k, label]) => (
+                        <label key={k} className="block">
+                          <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">{label}</span>
+                          <input value={detDraft?.[k] || ''} onChange={(e) => setDetDraft({ ...(detDraft || {}), [k]: e.target.value })} className={inputCls} />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                   <div>
-                    <h2 className="text-2xl font-black font-display tracking-tight">Events &amp; details</h2>
-                    <p className="text-sm opacity-60 mt-0.5">The journey your guests see on the Home timeline.</p>
-                  </div>
-                  <div className="space-y-3">
-                    {EVENTS_DATA.map((e, i) => {
-                      const st = JOURNEY_STATES[i];
-                      const label = st === 'done' ? 'Done' : st === 'next' ? 'Next up' : 'Upcoming';
-                      return (
+                    <h3 className="font-black font-display text-lg mb-3">The journey</h3>
+                    <div className="space-y-4">
+                      {evDraft.map((e, i) => (
                         <div key={e.id} className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                          <div className="flex items-center justify-between gap-3 flex-wrap">
-                            <div>
-                              <b className="font-display text-lg">{e.name}</b>
-                              <small className="block opacity-50">{e.type}</small>
-                            </div>
-                            <span className={`px-3 py-1.5 rounded-full text-[0.65rem] font-black uppercase tracking-widest ${st === 'done' ? 'bg-[#0E6B75]/15 text-[#0E6B75]' : st === 'next' ? 'bg-[#C8932A]/20 text-[#C8932A]' : 'opacity-40 bg-black/5'}`}>
-                              {label}
-                            </span>
+                          <div className="grid sm:grid-cols-2 gap-3">
+                            <label className="block">
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Event</span>
+                              <input value={e.name} onChange={(ev) => setEvDraft(evDraft.map((x, xi) => xi === i ? { ...x, name: ev.target.value } : x))} className={inputCls} />
+                            </label>
+                            <label className="block">
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Date</span>
+                              <input type="date" value={e.date} onChange={(ev) => setEvDraft(evDraft.map((x, xi) => xi === i ? { ...x, date: ev.target.value } : x))} className={inputCls} />
+                            </label>
+                            <label className="block">
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Venue</span>
+                              <input value={e.venue || ''} onChange={(ev) => setEvDraft(evDraft.map((x, xi) => xi === i ? { ...x, venue: ev.target.value } : x))} className={inputCls} />
+                            </label>
+                            <label className="block">
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Short description</span>
+                              <input value={e.desc} onChange={(ev) => setEvDraft(evDraft.map((x, xi) => xi === i ? { ...x, desc: ev.target.value } : x))} className={inputCls} />
+                            </label>
                           </div>
-                          <p className="text-sm opacity-70 mt-2">{new Date(`${e.date}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}{e.time ? ` · ${e.time}` : ''} · {e.desc}</p>
+                          <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Status shown to guests</span>
+                              <div className="flex rounded-full border border-[#DAD8E3] dark:border-[#22363E] overflow-hidden">
+                                {(['done', 'next', 'up'] as const).map((s) => (
+                                  <button key={s} type="button" onClick={() => setEvDraft(evDraft.map((x) => x.id === e.id ? { ...x, status: s } : (s === 'next' && x.status === 'next' ? { ...x, status: 'up' } : x)))} className={`px-4 py-2 text-[0.65rem] font-black uppercase tracking-widest ${e.status === s || (!e.status && s === 'up') ? 'bg-[#0E6B75] text-white' : 'opacity-60'}`}>
+                                    {s === 'done' ? 'Done' : s === 'next' ? 'Next up' : 'Upcoming'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              {i > 0 && (
+                                <button type="button" onClick={() => { const u = [...evDraft]; const t = u[i - 1]; u[i - 1] = u[i]; u[i] = t; setEvDraft(u); }} className="px-4 py-2 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.65rem] font-black uppercase tracking-widest">Move up</button>
+                              )}
+                              <button type="button" onClick={() => setEvDraft(evDraft.filter((_, xi) => xi !== i))} className="px-4 py-2 rounded-full border border-[#C4453B]/40 text-[#C4453B] text-[0.65rem] font-black uppercase tracking-widest">Delete</button>
+                            </div>
+                          </div>
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
+                    <button type="button" onClick={() => setEvDraft([...evDraft, { id: `ev${Date.now()}`, name: '', type: '', date: '', venue: '', desc: '', status: 'up' } as WeddingEvent])} className="mt-4 px-5 py-3 rounded-full border border-dashed border-[#0E6B75] text-[#0E6B75] text-[0.7rem] font-black uppercase tracking-widest">+ Add event</button>
                   </div>
-                  <p className="text-sm opacity-50">Event editing arrives with the next update. The countdown and statuses on the Home screen follow these dates.</p>
                 </div>
               )}
 
@@ -4688,86 +5002,80 @@ function AdminDashboardModal({
                     <p className="text-sm opacity-60 mt-0.5">People join without an account. This list shows everyone who has posted.</p>
                   </div>
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-1">Guest access code</h3>
+                    <p className="text-sm opacity-60 mb-4">Guests enter this once before their first post. Anyone can browse without it.</p>
+                    <div className="flex items-center gap-3 flex-wrap mb-4">
+                      <b className="font-display text-2xl tracking-[0.2em]">{activeCode}</b>
+                      <button type="button" onClick={() => { navigator.clipboard?.writeText(activeCode || ''); showToast('Access code copied'); }} className="px-4 py-2 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.65rem] font-black uppercase tracking-widest">Copy</button>
+                    </div>
+                    {adminPermissions?.canSetAccessCode && (
+                      <div>
+                        <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Set your own code</span>
+                        <div className="flex gap-2 flex-wrap">
+                          <input type="text" value={newCode} maxLength={20} onChange={(e) => { const val = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase(); setNewCode(val); setIsDirty(true); }} placeholder="E.G. DARAFEMI26" className={`${inputCls} flex-1 min-w-[200px] tracking-widest`} />
+                          <button onClick={async () => { await onUpdateCode(newCode); setIsDirty(false); }} disabled={!canSaveCode} className={`px-5 py-3 rounded-xl text-[0.7rem] font-black uppercase tracking-widest ${canSaveCode ? 'bg-[#0E6B75] text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>Save code</button>
+                          <button type="button" onClick={() => { const gen = Array.from({ length: 8 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 31)]).join(''); setNewCode(gen); onUpdateCode(gen); setIsDirty(false); }} className="px-5 py-3 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[0.7rem] font-black uppercase tracking-widest">Generate</button>
+                        </div>
+                        <p className="text-[0.7rem] opacity-50 mt-2">4 to 16 letters or numbers. Changing it stops the old code working.</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <h3 className="font-black font-display text-lg mb-3">People who have posted</h3>
                     <div className="space-y-3">
                       {(() => {
-                        const counts: Record<string, number> = {};
+                        const byKey: Record<string, { name: string; uid: string; count: number }> = {};
                         posts.forEach((p: any) => {
-                          const name = (p.authorName || '').trim();
-                          if (name) counts[name] = (counts[name] || 0) + 1;
+                          const uid = p.authorUid || `name:${(p.authorName || '').trim().toLowerCase()}`;
+                          if (!byKey[uid]) byKey[uid] = { name: (p.authorName || 'A guest').trim() || 'A guest', uid, count: 0 };
+                          byKey[uid].count += 1;
                         });
-                        const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+                        const rows = Object.values(byKey).sort((a, b) => b.count - a.count);
                         if (rows.length === 0) return <p className="opacity-50 text-sm">No posts yet, so nobody has shown up here.</p>;
-                        return rows.map(([name, count]) => (
-                          <div key={name} className="flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black text-sm">{name.charAt(0).toUpperCase()}</div>
-                              <b className="text-[0.95rem]">{name}</b>
+                        return rows.map((r) => {
+                          const isVendor = (vendors || []).includes(r.uid);
+                          const isBlocked = (blockedUids || []).includes(r.uid);
+                          return (
+                            <div key={r.uid} className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-9 h-9 rounded-xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black text-sm shrink-0">{r.name.charAt(0).toUpperCase()}</div>
+                                <div className="min-w-0 flex items-center gap-2">
+                                  <b className="text-[0.95rem] truncate">{r.name}</b>
+                                  <span className={`px-2 py-0.5 rounded-full text-[0.6rem] font-black uppercase tracking-widest shrink-0 ${isVendor ? 'bg-[#C8932A]/20 text-[#C8932A]' : 'bg-black/5 dark:bg-white/10 opacity-70'}`}>{isVendor ? 'Vendor' : 'Guest'}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 shrink-0">
+                                <span className="opacity-60 text-sm font-bold">{r.count} {r.count === 1 ? 'post' : 'posts'}</span>
+                                <button onClick={() => onUpdatePeople(isBlocked ? { blockedUids: (blockedUids || []).filter((u: string) => u !== r.uid) } : { blockedUids: [...(blockedUids || []), r.uid] })} className={`px-4 py-2 rounded-full text-[0.65rem] font-black uppercase tracking-widest ${isBlocked ? 'bg-[#1F8A5B] text-white' : 'border border-[#C4453B]/40 text-[#C4453B]'}`}>{isBlocked ? 'Unblock' : 'Block'}</button>
+                              </div>
                             </div>
-                            <span className="opacity-60 text-sm font-bold">{count} {count === 1 ? 'post' : 'posts'}</span>
-                          </div>
-                        ));
+                          );
+                        });
                       })()}
                     </div>
                   </div>
-                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                    <h3 className="font-black font-display text-lg mb-3">Our vendors</h3>
-                    <div className="grid sm:grid-cols-2 gap-3">
-                      <div className={`rounded-2xl p-4 border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-                        <b>Lens &amp; Light Studio</b>
-                        <span className="block text-sm opacity-50">Photographer</span>
-                      </div>
-                      <div className={`rounded-2xl p-4 border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-                        <b>Kiln Films</b>
-                        <span className="block text-sm opacity-50">Videographer</span>
-                      </div>
-                    </div>
-                  </div>
-                  <p className="text-sm opacity-50">The guest access code lives under Settings, further down.</p>
+                  <p className="text-sm opacity-50">Vendor status comes only from approving a request in Moderation. There is no &ldquo;make vendor&rdquo; button here.</p>
                 </div>
               )}
 
               {activeAdminTab === 'settings' && (
                 <div className="space-y-8">
-                  {adminPermissions?.canSetAccessCode && (
-                    <div>
-                      <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Active Access Code</label>
-                      <div className="flex gap-2">
-                        <input 
-                          type="text"
-                          value={newCode}
-                          maxLength={20}
-                          onChange={(e) => {
-                            const val = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase();
-                            setNewCode(val);
-                            setIsDirty(true);
-                          }}
-                          className={`flex-1 p-4 rounded-xl border-none outline-none font-black tracking-widest transition-colors ${isDarkMode ? 'bg-[#0B171C] text-[#0E6B75]' : 'bg-[#EEEDF3] text-[#0E6B75]'}`}
-                        />
-                        <button 
-                          onClick={async () => {
-                            await onUpdateCode(newCode);
-                            setIsDirty(false);
-                          }}
-                          disabled={!canSaveCode}
-                          className={`px-6 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${canSaveCode ? 'bg-[#0E6B75] text-white hover:scale-105 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
-                        >
-                          <Save className="w-4 h-4" />
-                          <span className="text-xs font-black uppercase tracking-widest">Save</span>
-                        </button>
-                      </div>
-                      <div className="mt-2 px-1">
-                        {!isCodeValid && newCode.length > 0 && (
-                          <p className="text-[0.65rem] text-red-500 font-bold uppercase tracking-tight">Code must be at least 4 characters</p>
-                        )}
-                        {isCodeValid && !isCodeChanged && isDirty && (
-                          <p className="text-[0.65rem] text-[#0E6B75] font-bold uppercase tracking-tight">Current code is already {normalizedActiveCode}</p>
-                        )}
-                      </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-4">Behaviour</h3>
+                    <div className="space-y-4">
+                      {([['approve', 'Approve guest posts first', 'New guest posts stay hidden until you approve them. Vendors skip this.', approveGuestPosts], ['push', 'Push notifications', 'Get a notification on this device when someone posts or comments.', pushEnabled], ['archive', 'Archive mode after the wedding', 'Keeps every memory viewable for life but stops new posts and comments.', archiveMode]] as [string, string, string, boolean][]).map(([k, label, sub, on]) => (
+                        <div key={k} className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <b className="block text-[0.95rem]">{label}</b>
+                            <small className="block opacity-50 text-sm">{sub}</small>
+                          </div>
+                          <button type="button" aria-label={label} onClick={() => onUpdateAppFlags(k === 'approve' ? { approveGuestPosts: !on } : k === 'push' ? { pushEnabled: !on } : { archiveMode: !on }, `${label}: ${on ? 'off' : 'on'}.`)} className={`relative w-12 h-7 rounded-full transition-colors shrink-0 ${on ? 'bg-[#0E6B75]' : 'bg-black/20 dark:bg-white/20'}`}>
+                            <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-6' : 'left-1'}`} />
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  )}
-
-
+                  </div>
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <h3 className="font-black font-display text-lg mb-2">Couple accounts</h3>
                     <p className="text-sm opacity-60 mb-4">Invite another admin with their email. They get a temporary password and must set a permanent one the first time they sign in.</p>
@@ -4779,14 +5087,6 @@ function AdminDashboardModal({
                         placeholder="name@email.com"
                         className={`flex-1 p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
                       />
-                      <select
-                        value={inviteRole}
-                        onChange={(e) => setInviteRole(e.target.value)}
-                        className={`p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
-                      >
-                        <option value="vendor">Vendor</option>
-                        <option value="guest">Guest</option>
-                      </select>
                       <button onClick={inviteDashboardAccess} disabled={inviteBusy} className="px-6 py-4 rounded-xl bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest disabled:opacity-50">
                         {inviteBusy ? 'Creating…' : 'Invite'}
                       </button>
@@ -4807,7 +5107,31 @@ function AdminDashboardModal({
                       </div>
                     )}
                   </div>
-                  <p className="text-sm opacity-50">Guests and vendors they invite to post keep working from the Guests tab.</p>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-4">Keep the memories</h3>
+                    <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                      <div className="min-w-0">
+                        <b className="block text-[0.95rem]">Download everything</b>
+                        <small className="block opacity-50 text-sm">Every photo and video in one zip, organised by event.</small>
+                      </div>
+                      <button onClick={onDownloadEverything} className="px-5 py-3 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest shrink-0">Download</button>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <b className="block text-[0.95rem]">Memory book</b>
+                        <small className="block opacity-50 text-sm">A printable PDF of the best posts and wishes.</small>
+                      </div>
+                      <button onClick={onCreateMemoryBook} className="px-5 py-3 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.7rem] font-black uppercase tracking-widest shrink-0">Create</button>
+                    </div>
+                  </div>
+                  <div className="rounded-[20px] p-5 border border-[#C4453B]/40">
+                    <h3 className="font-black font-display text-lg mb-1 text-[#C4453B]">Danger zone</h3>
+                    <p className="text-sm opacity-60 mb-3">Delete every guest post and wish. This cannot be undone.</p>
+                    <div className="flex gap-2 flex-wrap">
+                      <input value={dangerText} onChange={(e) => setDangerText(e.target.value.toUpperCase())} placeholder="TYPE DELETE" className={`${inputCls} max-w-[220px]`} />
+                      <button disabled={dangerText !== 'DELETE' || deleteAllBusy} onClick={async () => { setDeleteAllBusy(true); try { await onDeleteAllGuestData(); setDangerText(''); } finally { setDeleteAllBusy(false); } }} className="px-5 py-3 rounded-full bg-[#C4453B] text-white text-[0.7rem] font-black uppercase tracking-widest disabled:opacity-40">Delete everything</button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -5252,6 +5576,7 @@ interface FloatingPhotoCardProps {
   paused: boolean;
   onPauseDelta: (delta: number) => void;
   constraintsRef: React.RefObject<HTMLDivElement | null>;
+  eventNames?: string[];
 }
 
 // Hero runs as a 2x2 grid: two cards in the upper half, two in the lower half, at all times.
@@ -5259,7 +5584,7 @@ interface FloatingPhotoCardProps {
 // column clears the banner it wraps to the bottom, so the grid never empties.
 const HERO_TRAVERSE_SECONDS = 11; // Time for one card to travel one screen height
 
-const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset, slot, column, paused, onPauseDelta, constraintsRef }) => {
+const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset, slot, column, paused, onPauseDelta, constraintsRef, eventNames }) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
   const y = useMotionValue(1000);
@@ -5311,7 +5636,7 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
   });
 
   const currentImage = images.length > 0 ? images[imgIdx % images.length] : PLACEHOLDER_IMAGES[imgIdx % PLACEHOLDER_IMAGES.length];
-  const caption = EVENTS_DATA.length > 0 ? EVENTS_DATA[(imgIdx + imgOffset) % EVENTS_DATA.length].name : undefined;
+  const caption = eventNames && eventNames.length > 0 ? eventNames[(imgIdx + imgOffset) % eventNames.length] : (EVENTS_DATA.length > 0 ? EVENTS_DATA[(imgIdx + imgOffset) % EVENTS_DATA.length].name : undefined);
   const isPausedState = isHovered.current || isDragging.current || isTouching.current;
 
   return (
@@ -5366,7 +5691,7 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
   );
 }
 
-function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, images: string[] }) {
+function FloatingHeroSection({ isDarkMode, images, eventNames }: { isDarkMode: boolean, images: string[], eventNames?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pauseCount = useRef(0);
   const [heroPaused, setHeroPaused] = useState(false);
@@ -5394,6 +5719,7 @@ function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, imag
               key={`hero-${column}-${slot}`}
               images={baseImages}
               imgOffset={column * 2}
+              eventNames={eventNames}
               slot={slot}
               column={column}
               paused={heroPaused}
