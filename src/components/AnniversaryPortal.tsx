@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence, useAnimationFrame, useMotionValue } from 'motion/react';
 import { 
   Home, 
@@ -37,7 +37,9 @@ import {
   Trash,
   Megaphone,
   Edit3,
-  Download
+  Download,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { db, auth } from '../lib/firebase';
 import { get, set, del } from 'idb-keyval';
@@ -369,6 +371,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }
   });
   const [footerLightbox, setFooterLightbox] = useState<string | null>(null);
+  const [avatarZoom, setAvatarZoom] = useState<string | null>(null);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [newPostText, setNewPostText] = useState('');
   const [newPostEvent, setNewPostEvent] = useState<string>('');
@@ -1167,26 +1170,9 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     setSharingPost(p);
   };
 
-  const toggleVendorRequest = async () => {
-    if (!user) { showToast('Sign in first.', 'error'); return; }
-    try {
-      if ((vendors || []).includes(user.uid)) { showToast('You are already an official vendor.'); return; }
-      const myRes = residents.find((r: any) => r.uid === user.uid);
-      if (myRes?.vendorRequest?.status === 'pending') {
-        await setDoc(doc(db, 'residents', user.uid), { vendorRequest: { status: 'none', decidedAt: serverTimestamp() } }, { merge: true });
-        showToast('Request withdrawn.');
-      } else {
-        await setDoc(doc(db, 'residents', user.uid), { vendorRequest: { status: 'pending', requestedAt: serverTimestamp() } }, { merge: true });
-        showToast('Request sent. Dara and Femi will review it.');
-      }
-    } catch (err) {
-      console.error('vendor request failed', err);
-      showToast('Could not send the request.', 'error');
-    }
-  };
 
   const deleteAllGuestData = async () => {
-    if (!isAdmin || !adminPermissions?.canDeletePosts) { showToast('You do not have permission to delete posts.', 'error'); return; }
+    if (!isAdmin || adminPermissions?.canDeletePosts === false) { showToast('You do not have permission to delete posts.', 'error'); return; }
     try {
       const snap = await getDocs(collection(db, 'posts'));
       let n = 0;
@@ -1251,74 +1237,60 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     win.document.close();
   };
 
+  // Post lifecycle (delete / restore / erase) runs through the server admin
+  // endpoint, which verifies the caller's admins doc, then moves or removes
+  // the Firestore docs and purges the post's Cloudinary files.
+  const adminPostAction = async (action: 'delete' | 'restore' | 'erase', postId: string) => {
+    if (!user) throw new Error('Sign in required.');
+    const idToken = await user.getIdToken();
+    const res = await fetch('/api/admin-post-action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ action, postId })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Action failed.');
+    return data;
+  };
+
   // Delete Post (Move to Recycle Bin)
   const handleDeletePost = async (postId: string) => {
-    if (!isAdmin || !adminPermissions?.canDeletePosts) {
+    if (!isAdmin) {
       showToast("Permission denied for deletion.", "error");
       return;
     }
-    
     try {
-      const postRef = doc(db, 'posts', postId);
-      const postSnap = await getDoc(postRef);
-      
-      if (postSnap.exists()) {
-        const postData = postSnap.data();
-        
-        // 1. Move to deleted_posts
-        await setDoc(doc(db, 'deleted_posts', postId), {
-          originalId: postId,
-          postData: postData,
-          deletedAt: serverTimestamp(),
-          deletedBy: user.email
-        });
-        
-        // 2. Delete from main feed
-        await deleteDoc(postRef);
-        
-        showToast('Post moved to recycle bin');
-      }
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `posts/${postId}`);
+      const data = await adminPostAction('delete', postId);
+      const purged = data?.media?.purged || 0;
+      showToast(purged > 0 ? `Post moved to recycle bin (${purged} file${purged === 1 ? '' : 's'} removed from Cloudinary)` : 'Post moved to recycle bin');
+    } catch (err: any) {
       console.error("Delete error:", err);
-      showToast("Failed to move post to bin.", "error");
+      showToast(err?.message || "Failed to move post to bin.", "error");
     }
   };
 
   // Restore Post
   const handleRestorePost = async (postId: string) => {
-    if (!isAdmin || !adminPermissions?.canDeletePosts) return;
-
+    if (!isAdmin) return;
     try {
-      const delRef = doc(db, 'deleted_posts', postId);
-      const delSnap = await getDoc(delRef);
-
-      if (delSnap.exists()) {
-        const { postData } = delSnap.data();
-        
-        // 1. Move back to posts
-        await setDoc(doc(db, 'posts', postId), postData);
-        
-        // 2. Remove from bin
-        await deleteDoc(delRef);
-
-        showToast('Post restored to feed');
-      }
-    } catch (err) {
+      await adminPostAction('restore', postId);
+      showToast('Post restored to feed');
+    } catch (err: any) {
       console.error("Restore error:", err);
-      showToast("Failed to restore post.", "error");
+      showToast(err?.message || "Failed to restore post.", "error");
     }
   };
 
   // Permanent Delete
   const handlePermanentDelete = async (postId: string) => {
-    if (!isAdmin || !adminPermissions?.canDeletePosts) return;
+    if (!isAdmin) return;
     try {
-      await deleteDoc(doc(db, 'deleted_posts', postId));
-      showToast('Post permanently erased');
-    } catch (err) {
+      const data = await adminPostAction('erase', postId);
+      const purged = data?.media?.purged || 0;
+      showToast(purged > 0 ? `Post permanently erased (${purged} file${purged === 1 ? '' : 's'} removed from Cloudinary)` : 'Post permanently erased');
+    } catch (err: any) {
       console.error("Erase error:", err);
-      showToast("Failed to erase post.", "error");
+      showToast(err?.message || "Failed to erase post.", "error");
     }
   };
 
@@ -1335,6 +1307,24 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     });
     return () => unsub();
   }, []);
+
+  // Footer grid: newest posted images replace the placeholder cells first,
+  // then admin-set images, then the placeholders.
+  const postFeedImages = useMemo(() => {
+    const imgs: string[] = [];
+    for (const p of posts as any[]) {
+      if (p.pending) continue;
+      const urls: string[] = Array.isArray(p.mediaUrls) ? p.mediaUrls : (p.mediaUrl ? [p.mediaUrl] : []);
+      urls.forEach((u: string, i: number) => {
+        if (typeof u === 'string' && u.startsWith('http') && (p.mediaTypes?.[i] || 'image') !== 'video' && !imgs.includes(u)) imgs.push(u);
+      });
+    }
+    return imgs;
+  }, [posts]);
+  const footerPool = useMemo(
+    () => [...postFeedImages, ...(footerImages || []), ...PLACEHOLDER_IMAGES],
+    [postFeedImages, footerImages]
+  );
 
   // 3b. Detect video orientation for existing posts without explicit orientation metadata
   useEffect(() => {
@@ -1780,7 +1770,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               {/* GIANT FOOTER WITH INTERACTIVE PHOTO GRID (placeholders until photos arrive) */}
               <section className="relative overflow-hidden w-screen left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-[700px] sm:min-h-[850px] flex items-center justify-center bg-[#EEEDF3] dark:bg-[#0B171C] mt-12">
                 <div className="absolute inset-0 z-0 grid grid-cols-10 auto-rows-fr opacity-60">
-                  <GridScanner isDarkMode={isDarkMode} images={footerImages} onTap={(src: string) => setFooterLightbox(src)} />
+                  <GridScanner isDarkMode={isDarkMode} images={footerPool} onTap={(src: string) => setFooterLightbox(src)} />
                 </div>
 
                 <motion.div
@@ -1945,6 +1935,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           likeCount={p.likeCount}
                           loveCount={p.loveCount}
                           avatar={p.authorPhoto}
+                          onAvatarClick={(u: string) => setAvatarZoom(u)}
                           isAdmin={isAdmin}
                           user={user}
                           onDelete={() => setPostToDelete(p.id)}
@@ -1981,6 +1972,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </div>
                             ) : (
                 <ReelsFeed
+                  onAvatarClick={(u: string) => setAvatarZoom(u)}
                   reels={(() => {
                     const filteredReels = posts.filter((p) => {
                       if (p.id === 'jubilee_documentary') return false;
@@ -2058,7 +2050,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     ) : (
                       <User className="w-10 h-10" />
                     )}
-                    {isUploading && <div className="absolute inset-0 bg-black/40 flex items-center justify-center"><Sparkles className="w-6 h-6 animate-spin" /></div>}
+
                   </div>
                   <input 
                     type="file" 
@@ -2104,20 +2096,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     />
                   </div>
                   
-                  <div className={`flex items-center justify-between gap-4 border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'} pt-4 mt-4`}>
-
-                  <div className="min-w-0">
-                    <strong className="block text-[1rem]">I'm an official vendor</strong>
-                    <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
-                      {(vendors || []).includes(user?.uid) ? 'You post as an official vendor. Thank you!' : ((residents.find((r: any) => r.uid === user?.uid)?.vendorRequest?.status === 'pending') ? 'Waiting for the couple to approve.' : 'Photographer, videographer or planner? Ask to post officially.')}
-                    </small>
-                  </div>
-                  <button type="button" aria-label="Vendor request" onClick={toggleVendorRequest} disabled={!!user && (vendors || []).includes(user.uid)} className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-60 ${((!!user && (vendors || []).includes(user.uid)) || (residents.find((r: any) => r.uid === user?.uid)?.vendorRequest?.status === 'pending')) ? 'bg-[#0E6B75]' : 'bg-black/20 dark:bg-white/20'}`}>
-                    <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all ${(((!!user && (vendors || []).includes(user.uid))) || (residents.find((r: any) => r.uid === user?.uid)?.vendorRequest?.status === 'pending')) ? 'left-6' : 'left-1'}`} />
-                  </button>
-              
-                  </div>
-                  <button 
+<button 
                     onClick={saveProfile}
                     disabled={isSavingProfile}
                     className={`w-full py-3.5 rounded-full font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 ${
@@ -2627,27 +2606,33 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               onClick={() => setFooterLightbox(null)}
               className="fixed inset-0 z-[140] bg-black/90 backdrop-blur-sm"
             />
-            <motion.img
-              src={footerLightbox}
+            <motion.div
               initial={{ scale: 0.85, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={() => setFooterLightbox(null)}
-              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[141] max-w-[86vw] max-h-[80vh] object-contain rounded-2xl shadow-2xl cursor-pointer"
-              alt="Memory"
-            />
-            <motion.button
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setFooterLightbox(null)}
-              className="fixed top-5 right-5 z-[142] flex items-center gap-2 px-4 py-2.5 rounded-full bg-white/15 text-white border border-white/40 backdrop-blur-md text-xs font-black uppercase tracking-widest hover:bg-white/25 transition-colors"
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[141] cursor-pointer"
             >
-              <X className="w-4 h-4" /> Cancel
-            </motion.button>
+              <img
+                src={footerLightbox}
+                className="max-w-[86vw] max-h-[80vh] object-contain rounded-2xl shadow-2xl"
+                alt="Memory"
+              />
+              <button
+                onClick={(e) => { e.stopPropagation(); setFooterLightbox(null); }}
+                aria-label="Close"
+                className="absolute -top-3 -right-3 w-9 h-9 rounded-full bg-white text-[#14262D] shadow-lg grid place-items-center hover:bg-[#EEEDF3] transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </motion.div>
           </>
         )}
       </AnimatePresence>
+
+      {avatarZoom && (
+        <AvatarZoomModal src={avatarZoom} onClose={() => setAvatarZoom(null)} />
+      )}
 
       {/* Admin email/password auth screens */}
       {authScreen && (
@@ -2678,8 +2663,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         />
       )}
 
-      {/* Bottom Nav - DYNAMIC FEED/SEND BUTTON (hidden while viewing full-portrait Reels) */}
-      {!(activeTab === 'feed' && feedSubTab === 'reels') && (
+      {/* Bottom Nav - DYNAMIC FEED/SEND BUTTON (hidden while viewing full-portrait Reels or comments) */}
+      {!(activeTab === 'feed' && feedSubTab === 'reels') && !commentsPost && (
       <nav className={`fixed left-1/2 bottom-0 -translate-x-1/2 w-full max-w-[520px] z-[90] grid grid-cols-3 items-end p-[8px_12px_calc(8px+env(safe-area-inset-bottom,0px))] border-t transition-colors ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
         <button 
           onClick={() => setActiveTab('home')}
@@ -3057,6 +3042,7 @@ function Post({
   id, 
   name, 
   avatar, 
+  onAvatarClick,
   text, 
   time, 
   mediaUrls, 
@@ -3108,7 +3094,10 @@ function Post({
   const displayLoved = localLoved;
   return (
     <article id={`post-${id}`} className="flex gap-3 p-[20px_4px] border-b-[6px] border-[#D0CEDB] dark:border-[#1E323A] transition-all">
-      <div className={`flex-shrink-0 w-[42px] h-[42px] rounded-full overflow-hidden border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'} bg-[#0E6B75] flex items-center justify-center text-white font-bold text-[0.9rem]`}>
+      <div
+        onClick={() => onAvatarClick && avatar && onAvatarClick(avatar)}
+        className={`flex-shrink-0 w-[42px] h-[42px] rounded-full overflow-hidden border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'} bg-[#0E6B75] flex items-center justify-center text-white font-bold text-[0.9rem] ${avatar ? 'cursor-pointer hover:scale-105 transition-transform' : ''}`}
+      >
         {avatar ? <img src={avatar} className="w-full h-full object-cover" alt="" /> : <span>{name?.[0]?.toUpperCase() || 'R'}</span>}
       </div>
       <div className="flex-1 min-w-0">
@@ -3423,7 +3412,7 @@ function PostAdCard({ ad, isDarkMode }: { ad: AdItem; isDarkMode: boolean; [key:
   );
 }
 
-function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete, onLike, onLove, onShare, onComment }: any) {
+function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete, onLike, onLove, onShare, onComment, onAvatarClick }: any) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -3476,6 +3465,7 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
           onLove={() => onLove(reel.id)}
           onShare={() => onShare(reel)}
           onComment={() => onComment && onComment(reel)}
+          onAvatarClick={onAvatarClick}
           hasNext={idx < reels.length - 1}
         />
       ))}
@@ -3495,6 +3485,7 @@ function ReelCard({
   onLove,
   onShare,
   onComment,
+  onAvatarClick,
   hasNext
 }: any) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -3649,7 +3640,10 @@ function ReelCard({
       {/* Bottom scrim & author info */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/55 to-transparent p-4 pt-11 pr-[84px] text-white z-10">
         <div className="flex items-center gap-2.5">
-          <div className="w-[30px] h-[30px] rounded-full overflow-hidden flex items-center justify-center font-bold text-[13px] shrink-0 bg-[#0E6B75] text-white">
+          <div
+            onClick={() => onAvatarClick && reel.authorPhoto && onAvatarClick(reel.authorPhoto)}
+            className={`w-[30px] h-[30px] rounded-full overflow-hidden flex items-center justify-center font-bold text-[13px] shrink-0 bg-[#0E6B75] text-white ${reel.authorPhoto && !reel.isAd ? 'cursor-pointer' : ''}`}
+          >
             {reel.isAd ? (
               <Megaphone className="w-4 h-4" />
             ) : reel.authorPhoto ? (
@@ -3990,6 +3984,55 @@ function GridImage({ index, isDarkMode, isCleared: autoCleared, images = [], onT
         className={`absolute inset-0 ${isDarkMode ? 'bg-[#0B171C]/70' : 'bg-[#EEEDF3]/70'}`}
       />
     </div>
+  );
+}
+
+// Circular zoom-in popup for a poster's profile picture. Starts as a modest
+// circle, and the expand button takes it to a near-full-screen view.
+function AvatarZoomModal({ src, onClose }: { src: string; onClose: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="fixed inset-0 z-[170] bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center"
+      >
+        <motion.div
+          initial={{ scale: 0.7, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.8, opacity: 0 }}
+          transition={{ type: 'spring', stiffness: 260, damping: 22 }}
+          onClick={(e) => e.stopPropagation()}
+          className="relative flex flex-col items-center"
+        >
+          <img
+            src={src}
+            alt="Profile"
+            onClick={() => setExpanded((v) => !v)}
+            className={`${expanded ? 'w-screen max-w-[100vw] h-[82vh] object-contain rounded-3xl' : 'w-[min(72vw,340px)] aspect-square object-cover rounded-full shadow-2xl'} cursor-zoom-in transition-all`}
+          />
+          <div className="flex items-center gap-3 mt-4">
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              aria-label={expanded ? 'Exit full screen' : 'View full screen'}
+              className="w-10 h-10 rounded-full bg-white/15 border border-white/40 text-white grid place-items-center hover:bg-white/25 transition-colors"
+            >
+              {expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="w-10 h-10 rounded-full bg-white/15 border border-white/40 text-white grid place-items-center hover:bg-white/25 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
   );
 }
 
@@ -4589,7 +4632,7 @@ function AdminDashboardModal({
                         {[
                           { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper },
                           
-                          { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions?.canDeletePosts },
+                          { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions ? adminPermissions.canDeletePosts : true },
                         ].filter((t) => t.show).map((tab) => (
                           <button
                             key={tab.id}
@@ -4657,7 +4700,7 @@ function AdminDashboardModal({
                   {[
                     { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper },
                     
-                    { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions?.canDeletePosts },
+                    { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions ? adminPermissions.canDeletePosts : true },
                   ].filter((t) => t.show).map((tab) => (
                     <button
                       key={tab.id}
@@ -4875,7 +4918,7 @@ function AdminDashboardModal({
                               {media && (
                                 <button onClick={() => window.open(media, '_blank')} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Download</button>
                               )}
-                              {adminPermissions?.canDeletePosts && (
+                              {(adminPermissions ? adminPermissions.canDeletePosts : true) && (
                                 <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest">Remove</button>
                               )}
                             </div>
@@ -5729,8 +5772,6 @@ interface FloatingPhotoCardProps {
   imgOffset: number;
   slot: number;
   column: number;
-  paused: boolean;
-  onPauseDelta: (delta: number) => void;
   constraintsRef: React.RefObject<HTMLDivElement | null>;
   eventNames?: string[];
 }
@@ -5740,7 +5781,7 @@ interface FloatingPhotoCardProps {
 // column clears the banner it wraps to the bottom, so the grid never empties.
 const HERO_TRAVERSE_SECONDS = 11; // Time for one card to travel one screen height
 
-const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset, slot, column, paused, onPauseDelta, constraintsRef, eventNames }) => {
+const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset, slot, column, constraintsRef, eventNames }) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
   const y = useMotionValue(1000);
@@ -5776,7 +5817,8 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
 
     let speedMultiplier = 1.0;
     if (prefersReducedMotion) speedMultiplier *= 0.05;
-    if (paused) speedMultiplier = 0;
+    // Only the card being hovered, dragged or touched pauses; the others keep moving.
+    if (isHovered.current || isDragging.current || isTouching.current) speedMultiplier = 0;
 
     let nextY = y.get() - (pxPerSecond.current * dt * speedMultiplier);
 
@@ -5802,23 +5844,21 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
       dragMomentum={false}
       dragElastic={0}
       dragConstraints={constraintsRef}
-      onDragStart={() => { isDragging.current = true; onPauseDelta(1); }}
-      onDragEnd={() => { isDragging.current = false; if (!anyPaused()) onPauseDelta(-1); }}
+      onDragStart={() => { isDragging.current = true; }}
+      onDragEnd={() => { isDragging.current = false; }}
       onPointerEnter={(e) => {
         if (e.pointerType === 'mouse') {
           isHovered.current = true;
-          onPauseDelta(1);
         }
       }}
       onPointerLeave={(e) => {
         if (e.pointerType === 'mouse') {
           isHovered.current = false;
-          if (!anyPaused()) onPauseDelta(-1);
         }
       }}
-      onPointerDown={() => { isTouching.current = true; onPauseDelta(1); }}
-      onPointerUp={() => { isTouching.current = false; if (!anyPaused()) onPauseDelta(-1); }}
-      onPointerCancel={() => { isTouching.current = false; if (!anyPaused()) onPauseDelta(-1); }}
+      onPointerDown={() => { isTouching.current = true; }}
+      onPointerUp={() => { isTouching.current = false; }}
+      onPointerCancel={() => { isTouching.current = false; }}
       initial={{ rotate: column === 0 ? (slot % 2 === 0 ? -4 : 3) : (slot % 2 === 0 ? 3 : -4) }}
       style={{
         left: column === 0 ? '6%' : '54%',
@@ -5849,13 +5889,6 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
 
 function FloatingHeroSection({ isDarkMode, images, eventNames }: { isDarkMode: boolean, images: string[], eventNames?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const pauseCount = useRef(0);
-  const [heroPaused, setHeroPaused] = useState(false);
-
-  const handlePauseDelta = (delta: number) => {
-    pauseCount.current = Math.max(0, pauseCount.current + delta);
-    setHeroPaused(pauseCount.current > 0);
-  };
 
   const baseImages = images.length > 0 ? images : PLACEHOLDER_IMAGES;
 
@@ -5878,8 +5911,6 @@ function FloatingHeroSection({ isDarkMode, images, eventNames }: { isDarkMode: b
               eventNames={eventNames}
               slot={slot}
               column={column}
-              paused={heroPaused}
-              onPauseDelta={handlePauseDelta}
               constraintsRef={containerRef}
             />
           ))

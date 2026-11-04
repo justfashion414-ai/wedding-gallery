@@ -161,7 +161,7 @@ export async function getSaAccessToken(): Promise<string | null> {
 }
 
 /** Read one Firestore document's fields using the service account. */
-async function getDocFields(path: string, projectId: string): Promise<Record<string, any> | null> {
+export async function getDocFields(path: string, projectId: string): Promise<Record<string, any> | null> {
   const accessToken = await getSaAccessToken();
   if (!accessToken) return null;
   try {
