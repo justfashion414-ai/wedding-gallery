@@ -331,8 +331,12 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
 };
 
 export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalProps) {
-  const [activeTab, setActiveTab] = useState('home');
-  const [feedSubTab, setFeedSubTab] = useState<'post' | 'reels'>('post');
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    try { return localStorage.getItem('ann-last-tab') || 'home'; } catch { return 'home'; }
+  });
+  const [feedSubTab, setFeedSubTab] = useState<'post' | 'reels'>(() => {
+    try { return (localStorage.getItem('ann-last-feedtab') as 'post' | 'reels') || 'post'; } catch { return 'post'; }
+  });
   const [videoOrientations, setVideoOrientations] = useState<Record<string, 'portrait' | 'landscape'>>({});
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [fontSize, setFontSize] = useState<'m' | 'l' | 'xl'>('m');
@@ -428,7 +432,9 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [activeMediaIndex, setActiveMediaIndex] = useState<{postId: string, index: number} | null>(null);
 
   // PWA Install, Launch Follow-up Splash & Offline State
-  const [showLaunchSplash, setShowLaunchSplash] = useState(true);
+  const [showLaunchSplash, setShowLaunchSplash] = useState<boolean>(() => {
+    try { return !localStorage.getItem('ann-last-tab'); } catch { return true; }
+  });
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(() => (typeof window !== 'undefined' ? (window as any).__deferredPwaPrompt || null : null));
   const [isPWAInstalled, setIsPWAInstalled] = useState(false);
   const [isIOSDevice, setIsIOSDevice] = useState(false);
@@ -442,6 +448,34 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }, 5000);
     return () => clearTimeout(splashTimer);
   }, []);
+
+  // Keep the visitor where they were across refreshes
+  useEffect(() => {
+    try { localStorage.setItem('ann-last-tab', activeTab); } catch {}
+  }, [activeTab]);
+  useEffect(() => {
+    try { localStorage.setItem('ann-last-feedtab', feedSubTab); } catch {}
+  }, [feedSubTab]);
+
+  // Reopen the admin dashboard where it was left after a refresh
+  const adminUiFirstRunRef = useRef(true);
+  useEffect(() => {
+    if (adminUiFirstRunRef.current) {
+      adminUiFirstRunRef.current = false;
+      return;
+    }
+    try {
+      const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null') || {};
+      localStorage.setItem('ann-admin-ui', JSON.stringify({ ...storedAdminUi, open: isAdminModalOpen }));
+    } catch {}
+  }, [isAdminModalOpen]);
+  useEffect(() => {
+    if (!user || !isAdmin) return;
+    try {
+      const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null');
+      if (storedAdminUi && storedAdminUi.open) setIsAdminDashboardOpen(true);
+    } catch {}
+  }, [user, isAdmin]);
 
   useEffect(() => {
     const isStandalone =
@@ -3895,8 +3929,29 @@ function AdminDashboardModal({
   const [newCode, setNewCode] = useState(activeCode ?? '');
   const [isDirty, setIsDirty] = useState(false);
   const [isBulkUploading, setIsBulkUploading] = useState(false);
-  const [activeAdminTab, setActiveAdminTab] = useState('overview');
+  const [activeAdminTab, setActiveAdminTab] = useState<string>(() => {
+    try {
+      const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null');
+      return storedAdminUi?.tab || 'overview';
+    } catch {
+      return 'overview';
+    }
+  });
   const [mobileAdminNavOpen, setMobileAdminNavOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null') || {};
+      localStorage.setItem('ann-admin-ui', JSON.stringify({ ...storedAdminUi, tab: activeAdminTab }));
+    } catch {}
+  }, [activeAdminTab]);
+
+  const handleAdminSignOut = () => {
+    try { localStorage.removeItem('ann-admin-ui'); } catch {}
+    signOut(auth);
+    onClose();
+  };
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('vendor');
@@ -4048,7 +4103,21 @@ function AdminDashboardModal({
                   <Menu className="w-5 h-5" />
                 </button>
                 <p className="font-display text-white text-base font-medium">Dara &amp; Femi</p>
-                <button onClick={onClose} className="ml-auto shrink-0 p-2 rounded-full bg-white/10 text-white" aria-label="Close dashboard"><X className="w-4 h-4" /></button>
+                <div className="relative ml-auto">
+                  <button onClick={() => setProfileMenuOpen((v) => !v)} className="w-8 h-8 rounded-full bg-[#0E6B75] text-white grid place-items-center font-black text-[0.8rem]" aria-label="Profile">{(currentUserEmail || 'A').charAt(0).toUpperCase()}</button>
+                  {profileMenuOpen && (
+                    <div className={`absolute right-0 top-10 w-56 rounded-2xl border p-2 shadow-2xl z-[130] ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                      <p className="px-3 py-2 text-[0.72rem] opacity-60 break-all">{currentUserEmail}</p>
+                      <button onClick={handleAdminSignOut} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-[0.85rem] font-bold text-left text-[#C4453B] hover:bg-[#C4453B]/10">
+                        <LogOut className="w-4 h-4" />
+                        <span>Sign out</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button onClick={onClose} className="shrink-0 p-2 rounded-full bg-white/10 text-white" aria-label="Close dashboard"><X className="w-4 h-4" /></button>
+
+              </div>
 
                 {/* Slide-in sidebar (mobile) */}
                 {mobileAdminNavOpen && (
@@ -4105,14 +4174,27 @@ function AdminDashboardModal({
                       </button>
                     </div>
                   </div>
-                )}
-              </div>
 
+                )}
               {/* Sidebar (desktop) */}
               <aside className="hidden md:flex flex-col w-[250px] shrink-0 bg-[#0B171C] text-white p-5 overflow-y-auto">
-                <div className="mb-6">
-                  <p className="font-display text-[1.25rem] font-medium">Dara &amp; Femi</p>
-                  <p className="text-[0.66rem] uppercase tracking-widest text-white/40 font-black mt-0.5">Couple dashboard</p>
+                <div className="mb-6 flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-display text-[1.25rem] font-medium">Dara &amp; Femi</p>
+                    <p className="text-[0.66rem] uppercase tracking-widest text-white/40 font-black mt-0.5">Couple dashboard</p>
+                  </div>
+                  <div className="relative shrink-0">
+                    <button onClick={() => setProfileMenuOpen((v) => !v)} className="w-9 h-9 rounded-full bg-[#0E6B75] text-white grid place-items-center font-black" aria-label="Profile">{(currentUserEmail || 'A').charAt(0).toUpperCase()}</button>
+                    {profileMenuOpen && (
+                      <div className={`absolute right-0 top-11 w-56 rounded-2xl border p-2 shadow-2xl z-[130] ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                        <p className="px-3 py-2 text-[0.72rem] opacity-60 break-all">{currentUserEmail}</p>
+                        <button onClick={handleAdminSignOut} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-[0.85rem] font-bold text-left text-[#C4453B] hover:bg-[#C4453B]/10">
+                          <LogOut className="w-4 h-4" />
+                          <span>Sign out</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <nav className="flex flex-col gap-1">
                   {[
