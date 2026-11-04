@@ -5776,7 +5776,7 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
       <div className={`bg-white p-2 pb-2 shadow-2xl rounded-sm ${isPausedState ? 'scale-110 shadow-black/40' : 'shadow-black/20'}`}>
         <img
           src={currentImage}
-          className="w-full h-auto object-cover pointer-events-none"
+          className="w-full max-h-[calc(32.5vh-80px)] sm:max-h-[calc(40vh-80px)] object-cover object-center pointer-events-none"
           alt=""
           draggable={false}
         />
