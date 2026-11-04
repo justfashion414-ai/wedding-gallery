@@ -718,7 +718,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         setIsAdmin(true);
         setAdminPermissions(snap.data().permissions);
         setMustSetPassword(!!snap.data().mustSetPassword);
-        if (!adminAutoOpenedRef.current && !snap.data().mustSetPassword) { adminAutoOpenedRef.current = true; setIsAdminDashboardOpen(true); }
+        if (!adminAutoOpenedRef.current) { adminAutoOpenedRef.current = true; setIsAdminDashboardOpen(true); }
       } else if (isSuper) {
         setMustSetPassword(false);
         setIsAdmin(true);
