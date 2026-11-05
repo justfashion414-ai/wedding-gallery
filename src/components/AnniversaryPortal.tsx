@@ -444,6 +444,10 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [residents, setResidents] = useState<any[]>([]);
   const [approveGuestPosts, setApproveGuestPosts] = useState<boolean>(true);
   const [pushEnabled, setPushEnabled] = useState<boolean>(true);
+  // Feed action button mode: 'share' opens the share sheet, 'download' saves the
+  // media straight to the guest's device. Chosen by the admin in the console
+  // Settings tab and stored on app_config/main as feedActionMode.
+  const [feedActionMode, setFeedActionMode] = useState<'share' | 'download'>('share');
   const [adminPermissions, setAdminPermissions] = useState<any>(null);
   const [deletedPosts, setDeletedPosts] = useState<any[]>([]);
   const [allAdmins, setAllAdmins] = useState<any[]>([]);
@@ -873,6 +877,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         if (Array.isArray(data.blockedUids)) setBlockedUids(data.blockedUids);
         if (Array.isArray(data.vendors)) setVendors(data.vendors);
         if (typeof data.approveGuestPosts === 'boolean') setApproveGuestPosts(data.approveGuestPosts);
+        if (data.feedActionMode === 'download' || data.feedActionMode === 'share') setFeedActionMode(data.feedActionMode);
         if (typeof data.pushEnabled === 'boolean') setPushEnabled(data.pushEnabled);
         if (Array.isArray(data.postAds)) {
           setPostAds(data.postAds);
@@ -1161,6 +1166,10 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }
   };
 
+  /**
+   * Shares a post through the device's native share sheet where one exists,
+   * falling back to the in-app ShareSheet (WhatsApp / copy link / X).
+   */
   const sharePost = async (p: any) => {
     const url = `${window.location.origin}${window.location.pathname}?post=${p.id}`;
     const title = p.text || p.caption || 'A memory from Dara & Femi';
@@ -1168,6 +1177,43 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       try { await (navigator as any).share({ title: 'Dara & Femi', text: title, url }); return; } catch { return; }
     }
     setSharingPost(p);
+  };
+
+  /**
+   * Downloads a post's or reel's media files straight to the guest's device,
+   * one file at a time. This backs the "Download" mode of the feed action
+   * button, which the admin turns on in the console Settings tab
+   * (app_config/main.feedActionMode). Cloudinary files are served with open
+   * CORS headers, so a plain fetch works for both images and videos; a short
+   * pause between files keeps mobile browsers from blocking the batch.
+   */
+  const downloadMediaFiles = async (urls: string[], types: any[] | undefined, baseName = 'dara-femi-memory') => {
+    const list = Array.isArray(urls) ? urls.filter(Boolean) : [];
+    if (!list.length) { showToast('There is no photo or video on this post to download.', 'error'); return; }
+    showToast(list.length > 1 ? 'Downloading files…' : 'Downloading…');
+    let ok = 0;
+    for (let i = 0; i < list.length; i++) {
+      try {
+        const res = await fetch(list[i]);
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const u = list[i];
+        const isVideo = types?.[i] === 'video' || u.toLowerCase().includes('.mp4') || u.toLowerCase().includes('.webm') || u.toLowerCase().includes('.mov') || u.includes('/video/');
+        const ext = isVideo ? 'mp4' : (u.split('?')[0].split('.').pop() || 'jpg').slice(0, 5);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${baseName}${list.length > 1 ? `-${i + 1}` : ''}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+        ok += 1;
+        if (list.length > 1) await new Promise((r) => setTimeout(r, 400));
+      } catch (err) {
+        console.error('Media download failed:', err);
+      }
+    }
+    showToast(ok ? `Saved ${ok} ${ok === 1 ? 'file' : 'files'} to your device.` : 'Could not download the files. Please try again.', ok ? 'success' : 'error');
   };
 
 
@@ -2370,12 +2416,28 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </div>
               </div>
 
-              <textarea 
-                placeholder="What's happening at the celebration?"
-                value={newPostText}
-                onChange={(e) => setNewPostText(e.target.value)}
-                className={`w-full min-h-[140px] p-4 rounded-2xl border-none outline-none resize-none text-[1.05rem] font-medium transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
-              />
+              {attachedMedia.length > 0 && (
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  {attachedMedia.map((item, idx) => (
+                    <div key={item.id} className={`relative rounded-xl overflow-hidden border border-[#DAD8E3] dark:border-[#22363E] bg-black ${item.orientation === 'portrait' ? 'aspect-[9/16] max-h-[200px]' : 'aspect-video'}`}>
+                      {item.type === 'video' ? (
+                        <video src={item.url} className="w-full h-full object-cover" muted playsInline />
+                      ) : (
+                        <img src={item.url} className="w-full h-full object-cover" alt="Attachment" />
+                      )}
+                      <button 
+                        onClick={() => {
+                          setAttachedMedia(prev => prev.filter((_, i) => i !== idx));
+                          del(item.id); // Cleanup IDB
+                        }}
+                        className="absolute top-1 right-1 p-1 bg-black/60 text-white rounded-full backdrop-blur-md"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="mt-4">
                 <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-2">Which part of the celebration is this?</span>
@@ -2403,29 +2465,13 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 )}
               </div>
 
-              {attachedMedia.length > 0 && (
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  {attachedMedia.map((item, idx) => (
-                    <div key={item.id} className={`relative rounded-xl overflow-hidden border border-[#DAD8E3] dark:border-[#22363E] bg-black ${item.orientation === 'portrait' ? 'aspect-[9/16] max-h-[200px]' : 'aspect-video'}`}>
-                      {item.type === 'video' ? (
-                        <video src={item.url} className="w-full h-full object-cover" muted playsInline />
-                      ) : (
-                        <img src={item.url} className="w-full h-full object-cover" alt="Attachment" />
-                      )}
-                      <button 
-                        onClick={() => {
-                          setAttachedMedia(prev => prev.filter((_, i) => i !== idx));
-                          del(item.id); // Cleanup IDB
-                        }}
-                        className="absolute top-1 right-1 p-1 bg-black/60 text-white rounded-full backdrop-blur-md"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
 
+              <textarea 
+                placeholder="What's happening at the celebration?"
+                value={newPostText}
+                onChange={(e) => setNewPostText(e.target.value)}
+                className={`w-full min-h-[140px] p-4 rounded-2xl border-none outline-none resize-none text-[1.05rem] font-medium transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+              />
               <div className="mt-6 flex items-center justify-between">
                 <div className="flex gap-2">
                   <input 
@@ -5270,6 +5316,17 @@ function AdminDashboardModal({
                             <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-6' : 'left-1'}`} />
                           </button>
                         </div>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Post action button: the admin picks Share or Download for the
+                      third button on every post and reel (app_config/main.feedActionMode). */}
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-1">Post action button</h3>
+                    <p className="text-sm opacity-60 mb-4">The third button on every post and reel. Share opens the share sheet; Download saves the photo or video straight to the guest's device.</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {([['share', 'Share button'], ['download', 'Download button']] as [string, string][]).map(([val, label]) => (
+                        <button key={val} type="button" onClick={() => { if (feedActionMode !== val) onUpdateAppFlags({ feedActionMode: val }, `Post action button: ${label}.`); }} className={`px-5 py-3 rounded-xl text-[0.7rem] font-black uppercase tracking-widest border transition-colors ${feedActionMode === val ? 'bg-[#0E6B75] text-white border-[#0E6B75]' : (isDarkMode ? 'border-[#22363E] text-[#93A4AB]' : 'border-[#DAD8E3] text-[#5A6970]')}`}>{label}</button>
                       ))}
                     </div>
                   </div>
