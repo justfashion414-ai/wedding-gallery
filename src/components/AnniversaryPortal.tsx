@@ -6342,6 +6342,7 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
   const initialized = useRef(false);
   const pxPerSecond = useRef(0);
   const [imgIdx, setImgIdx] = useState(slot + imgOffset);
+  const [shownImage, setShownImage] = useState<string>('');
   const prefersReducedMotion = typeof window !== 'undefined' ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
 
   const anyPaused = () => isHovered.current || isDragging.current || isTouching.current;
@@ -6424,12 +6425,18 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
       whileHover={{ scale: 1.05, zIndex: 110 }}
     >
       <div className={`bg-white p-2 pb-2 shadow-2xl rounded-sm ${isPausedState ? 'scale-110 shadow-black/40' : 'shadow-black/20'}`}>
-        <img
-          src={currentImage}
-          className="w-full max-h-[calc(32.5vh-80px)] sm:max-h-[calc(40vh-80px)] object-cover object-center pointer-events-none"
-          alt=""
-          draggable={false}
-        />
+        <div className="relative w-full h-[calc(32.5vh-80px)] sm:h-[calc(40vh-80px)] overflow-hidden pointer-events-none">
+          {shownImage && shownImage !== currentImage && (
+            <img src={shownImage} className="absolute inset-0 w-full h-full object-cover object-center" alt="" draggable={false} />
+          )}
+          <img
+            src={currentImage}
+            onLoad={() => setShownImage(currentImage)}
+            className={`absolute inset-0 w-full h-full object-cover object-center transition-opacity duration-300 ${shownImage === currentImage ? 'opacity-100' : 'opacity-0'}`}
+            alt=""
+            draggable={false}
+          />
+        </div>
         {caption && (
           <p className="text-center text-[0.78rem] font-bold font-display text-[#14262D] pt-2 pb-1 leading-tight">{caption}</p>
         )}
@@ -6437,6 +6444,10 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
     </motion.div>
   );
 }
+
+// URLs already pulled into the browser cache this session; lets a remounted
+// hero show its cards immediately instead of waiting on a fresh preload.
+const heroPreloadedUrls = new Set<string>();
 
 function FloatingHeroSection({ isDarkMode, images, eventNames }: { isDarkMode: boolean, images: string[], eventNames?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -6449,9 +6460,19 @@ function FloatingHeroSection({ isDarkMode, images, eventNames }: { isDarkMode: b
   // once the first batch has loaded, so pictures never pop in or out.
   useEffect(() => {
     let cancelled = false;
-    baseImages.forEach((src: string) => {
+    const missing = baseImages.filter((src: string) => !heroPreloadedUrls.has(src));
+    if (missing.length === 0) {
+      setCardsReady(true);
+      return;
+    }
+    let doneCount = 0;
+    missing.forEach((src: string) => {
       const img = new Image();
-      const done = () => { if (!cancelled) setCardsReady(true); };
+      const done = () => {
+        heroPreloadedUrls.add(src);
+        doneCount += 1;
+        if (!cancelled && doneCount >= missing.length) setCardsReady(true);
+      };
       img.onload = done;
       img.onerror = done;
       img.src = src;
