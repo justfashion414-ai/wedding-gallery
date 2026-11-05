@@ -4737,6 +4737,29 @@ function AdminDashboardModal({
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('vendor');
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [rulesBusy, setRulesBusy] = useState(false);
+
+  // Re-applies the app's fixed Firestore security rules through the auth-admin
+  // function (super admin only). Keeps guest-post approval enforced server-side.
+  const publishSecurityRules = async () => {
+    setRulesBusy(true);
+    try {
+      const currentUser = auth.currentUser;
+      const token = currentUser ? await currentUser.getIdToken() : '';
+      const res = await fetch('/api/auth-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'publishRules' })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) showToast('Security rules published.');
+      else showToast('Could not publish the rules. Try again in a moment.', 'error');
+    } catch (err) {
+      showToast('Could not publish the rules. Check your connection.', 'error');
+    } finally {
+      setRulesBusy(false);
+    }
+  };
   const [inviteResult, setInviteResult] = useState<{ email: string; tempPassword: string } | null>(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteStep, setInviteStep] = useState<'form' | 'done'>('form');
@@ -5821,6 +5844,13 @@ function AdminDashboardModal({
                       ))}
                     </div>
                   </div>
+                  {isSuper && (
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-1">Security rules</h3>
+                    <p className="text-sm opacity-60 mb-4">Republishes the app's database security rules. This is what keeps guest posts waiting for approval hidden from everyone except their author and admins, even outside the app.</p>
+                    <button type="button" onClick={publishSecurityRules} disabled={rulesBusy} className={`px-5 py-3 rounded-xl text-[0.7rem] font-black uppercase tracking-widest transition-colors ${rulesBusy ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-[#0E6B75] text-white'}`}>{rulesBusy ? 'Publishing…' : 'Publish rules'}</button>
+                  </div>
+                  )}
                   {isSuper && (
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                     <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
