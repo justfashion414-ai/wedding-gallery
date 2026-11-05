@@ -172,7 +172,12 @@ service cloud.firestore {
     }
 
     match /posts/{postId} {
-      allow read: if true;
+      // Posts waiting for approval stay private: the author, an admin, or the
+      // super admin can read them; everyone else only sees approved posts.
+      allow read: if resource.data.get('pending', false) != true
+        || (isSignedIn() && resource.data.authorUid == request.auth.uid)
+        || (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.token.email)))
+        || isSuperAdmin();
       allow create: if isSignedIn() && (
         (request.resource.data.authorUid == request.auth.uid) ||
         isSuperAdmin() || 
