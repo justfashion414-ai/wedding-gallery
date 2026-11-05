@@ -33,13 +33,13 @@ import {
   User,
   Camera,
   Check,
-  Users,
   Trash,
   Megaphone,
   Edit3,
   Download,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Mail
 } from 'lucide-react';
 import { db, auth } from '../lib/firebase';
 import { get, set, del } from 'idb-keyval';
@@ -451,6 +451,9 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [adminPermissions, setAdminPermissions] = useState<any>(null);
   const [deletedPosts, setDeletedPosts] = useState<any[]>([]);
   const [allAdmins, setAllAdmins] = useState<any[]>([]);
+  // Label attached to each hero photo (url -> event name), set in the console's
+  // Hero photos tab and stored on app_config/main.
+  const [heroImageLabels, setHeroImageLabels] = useState<Record<string, string>>({});
   const [heroImages, setHeroImages] = useState<string[]>(() => {
     try {
       const cached = localStorage.getItem('ann-hero-images');
@@ -870,6 +873,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
             // Ignore storage quota error
           }
         }
+        if (data.heroImageLabels && typeof data.heroImageLabels === 'object') setHeroImageLabels(data.heroImageLabels);
         if (Array.isArray(data.events) && data.events.length) setCfgEvents(data.events);
         if (typeof data.story === 'string' && data.story.trim()) setCfgStory(data.story);
         if (data.weddingDetails && typeof data.weddingDetails === 'object') setCfgDetails(data.weddingDetails);
@@ -1153,6 +1157,33 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
       showToast('Failed to save the setting.', 'error');
+    }
+  };
+
+  // Saves the label attached to each hero photo (url -> event name).
+  const updateHeroLabels = async (map: Record<string, string>) => {
+    setHeroImageLabels(map);
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), { heroImageLabels: map, lastUpdated: serverTimestamp() }, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Could not save the label.', 'error');
+    }
+  };
+
+  // Saves one section of the wedding details (story, details or events) on its
+  // own, used by the per-section Save buttons in the console's Events & details tab.
+  const updateWeddingSection = async (patch: Record<string, any>) => {
+    if (!isAdmin || !isAdminSessionValid) return;
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), { ...patch, lastUpdated: serverTimestamp() }, { merge: true });
+      if ('events' in patch) setCfgEvents(patch.events);
+      if ('story' in patch) setCfgStory(patch.story);
+      if ('weddingDetails' in patch) setCfgDetails(patch.weddingDetails);
+      showToast('Saved. Guests see this on the Home screen.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Could not save. Please try again.', 'error');
     }
   };
 
@@ -2272,6 +2303,9 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         }}
         isDarkMode={isDarkMode}
         heroImages={heroImages}
+        heroImageLabels={heroImageLabels}
+        onUpdateHeroLabels={updateHeroLabels}
+        onSaveWeddingSection={updateWeddingSection}
         onUpdateHeroImages={async (urls: string[]) => {
           const capped = urls.slice(0, 14);
           setHeroImages(capped);
@@ -2994,14 +3028,13 @@ function MediaLightbox({ post, initialIndex, isDarkMode, onClose }: any) {
   const isVideo = current?.toLowerCase().includes('.mp4') || current?.includes('/video/');
 
   const handleDownload = async () => {
-    if (isVideo) return;
     try {
       const response = await fetch(current);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `ire-akari-memory-${Date.now()}.jpg`;
+      a.download = `dara-femi-memory-${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -4351,6 +4384,9 @@ function AdminDashboardModal({
   onUpdateCode, 
   isDarkMode, 
   heroImages, 
+  heroImageLabels,
+  onUpdateHeroLabels,
+  onSaveWeddingSection,
   onUpdateHeroImages,
   footerImages,
   onUpdateFooterImages,
@@ -4393,7 +4429,7 @@ function AdminDashboardModal({
     try {
       const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null');
       const storedTab = storedAdminUi?.tab;
-      return storedTab && storedTab !== 'admins' ? storedTab : 'overview';
+      return storedTab && ['overview', 'moderation', 'posts', 'events', 'hero', 'settings', 'ads', 'recycle'].includes(storedTab) ? storedTab : 'overview';
     } catch {
       return 'overview';
     }
@@ -4414,6 +4450,10 @@ function AdminDashboardModal({
     onClose();
   };
   const [newAdminEmail, setNewAdminEmail] = useState('');
+  // All posts preview: the post being watched/viewed full-screen from the list.
+  const [adminViewerPost, setAdminViewerPost] = useState<any>(null);
+  // Label to attach to newly uploaded hero photos.
+  const [newHeroLabel, setNewHeroLabel] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('vendor');
   const [inviteBusy, setInviteBusy] = useState(false);
@@ -4502,6 +4542,24 @@ function AdminDashboardModal({
   useEffect(() => { setDetDraft(weddingDetails); }, [weddingDetails]);
 
   const inputCls = `w-full p-3.5 rounded-xl border-none outline-none font-bold text-sm ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`;
+  // The photos the hero actually shows right now: the admin's list when one
+  // exists, otherwise the built-in placeholder photos the site falls back to.
+  // Editing from the admin grid always writes the full list, so removing a
+  // placeholder or adding a photo takes the hero over from the placeholders.
+  const heroShown: string[] = heroImages.length ? heroImages : PLACEHOLDER_IMAGES;
+
+  // Per-section saves: each card in Events & details commits on its own, so the
+  // couple never has to save unrelated sections together. The Preview button
+  // saves everything first, then opens the live website in a new tab so they
+  // can see the changes without leaving the console.
+  const saveStory = async () => { setWeddingBusy(true); try { await onSaveWeddingSection({ story: storyDraft }); } finally { setWeddingBusy(false); } };
+  const saveDetails = async () => { setWeddingBusy(true); try { await onSaveWeddingSection({ weddingDetails: detDraft }); } finally { setWeddingBusy(false); } };
+  const saveEvents = async () => { setWeddingBusy(true); try { await onSaveWeddingSection({ events: evDraft }); } finally { setWeddingBusy(false); } };
+  const previewSite = async () => {
+    setWeddingBusy(true);
+    try { await onSaveWedding(evDraft, storyDraft, detDraft); } finally { setWeddingBusy(false); }
+    window.open('/', '_blank');
+  };
 
   const saveWedding = async () => {
     setWeddingBusy(true);
@@ -4552,6 +4610,32 @@ function AdminDashboardModal({
   const isCodeValid = normalizedNewCode.length >= 4;
   const isCodeChanged = normalizedNewCode !== normalizedActiveCode;
   const canSaveCode = isCodeValid && isCodeChanged;
+
+  // Saves a post's media file straight to the admin's device from the All posts
+  // list (the Download button on each row).
+  const adminDownloadMedia = async (p: any) => {
+    const urls = Array.isArray(p.mediaUrls) ? p.mediaUrls : (p.mediaUrl ? [p.mediaUrl] : []);
+    if (!urls.length) { if (showToast) showToast('There is no photo or video on this post.', 'error'); return; }
+    try {
+      const res = await fetch(urls[0]);
+      if (!res.ok) throw new Error('fetch failed');
+      const blob = await res.blob();
+      const u = urls[0];
+      const isVideo = p.mediaTypes?.[0] === 'video' || u.toLowerCase().includes('.mp4') || u.toLowerCase().includes('.webm') || u.toLowerCase().includes('.mov') || u.includes('/video/');
+      const ext = isVideo ? 'mp4' : (u.split('?')[0].split('.').pop() || 'jpg').slice(0, 5);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `dara-femi-${String(p.authorName || 'memory').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24)}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      if (showToast) showToast('Saved to your device.', 'success');
+    } catch (err) {
+      console.error('Admin media download failed:', err);
+      if (showToast) showToast('Could not download the file. Please try again.', 'error');
+    }
+  };
 
   const handleAddAdmin = async () => {
     if (!newAdminEmail.trim() || !newAdminEmail.includes('@')) return;
@@ -4658,7 +4742,6 @@ function AdminDashboardModal({
                           { id: 'posts', label: 'All posts', icon: Film },
                           { id: 'events', label: 'Events & details', icon: Calendar },
                           { id: 'hero', label: 'Hero photos', icon: ImageIcon },
-                          { id: 'guests', label: 'Guests & vendors', icon: Users },
                           { id: 'settings', label: 'Settings', icon: Settings },
                         ].map((tab) => (
                           <button
@@ -4727,7 +4810,6 @@ function AdminDashboardModal({
                     { id: 'posts', label: 'All posts', icon: Film },
                     { id: 'events', label: 'Events & details', icon: Calendar },
                     { id: 'hero', label: 'Hero photos', icon: ImageIcon },
-                    { id: 'guests', label: 'Guests & vendors', icon: Users },
                     { id: 'settings', label: 'Settings', icon: Settings },
                   ].map((tab) => (
                     <button
@@ -4943,26 +5025,51 @@ function AdminDashboardModal({
                     {(() => {
                       const filtered = posts.filter((p: any) => (postEventFilter === 'all' || p.eventId === postEventFilter) && (postTypeFilter === 'all' || postTypeOf(p) === postTypeFilter));
                       if (filtered.length === 0) return <p className="p-5 opacity-50 text-sm">No posts match. Memories your guests share will show up here.</p>;
+                      // How many posts each person has made, shown next to their
+                      // name on every row so the couple sees a guest's history.
+                      const postCountByKey: Record<string, number> = {};
+                      posts.forEach((q: any) => {
+                        const k = q.authorUid || `name:${(q.authorName || '').trim().toLowerCase()}`;
+                        postCountByKey[k] = (postCountByKey[k] || 0) + 1;
+                      });
                       return filtered.map((p: any) => {
                         const t = postTypeOf(p);
+                        const authorKey = p.authorUid || `name:${(p.authorName || '').trim().toLowerCase()}`;
                         const evName = (events || []).find((e) => e.id === p.eventId)?.name;
                         const when = p.timestamp?.toDate ? p.timestamp.toDate() : (p.createdAt?.toDate ? p.createdAt.toDate() : null);
-                        const media = (p.mediaUrls || [])[0];
-                        return (
                           <div key={p.id} className="flex items-center gap-3 p-4">
-                            <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                            {/* Small preview: tap to watch a video or view the photo full-screen. */}
+                            {(() => {
+                              const urls = Array.isArray(p.mediaUrls) ? p.mediaUrls : (p.mediaUrl ? [p.mediaUrl] : []);
+                              const isVid = urls.length > 0 && (p.mediaTypes?.[0] === 'video' || urls[0].toLowerCase().includes('.mp4') || urls[0].toLowerCase().includes('.webm') || urls[0].toLowerCase().includes('.mov') || urls[0].includes('/video/'));
+                              return urls.length ? (
+                                <button type="button" onClick={() => setAdminViewerPost(p)} className="relative w-14 h-14 rounded-2xl overflow-hidden bg-black shrink-0 border border-[#DAD8E3] dark:border-[#22363E]" title="Open preview">
+                                  {isVid ? (
+                                    <>
+                                      <video src={urls[0]} className="w-full h-full object-cover" muted playsInline />
+                                      <span className="absolute inset-0 grid place-items-center bg-black/30"><Play className="w-5 h-5 text-white fill-current" /></span>
+                                    </>
+                                  ) : (
+                                    <img src={urls[0]} className="w-full h-full object-cover" alt="" />
+                                  )}
+                                </button>
+                              ) : (
+                                <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                              );
+                            })()}
                             <div className="flex-1 min-w-0">
                               <p className="font-bold text-[0.92rem] truncate">
                                 {p.authorName || 'A guest'}
                                 <span className="ml-2 px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[0.6rem] font-black uppercase tracking-widest opacity-70">{t}</span>
                                 {evName && <span className="ml-1.5 px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[0.6rem] font-black uppercase tracking-widest opacity-70">{evName}</span>}
+                                {(postCountByKey[authorKey] || 1) > 1 && <span className="ml-1.5 px-2 py-0.5 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] dark:text-[#4FC3CF] text-[0.6rem] font-black uppercase tracking-widest shrink-0">{postCountByKey[authorKey]} posts</span>}
                               </p>
                               <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'}</small>
                               <small className="block opacity-40">{(p.likeCount || 0) + (p.loveCount || 0)} likes · {p.commentCount || 0} comments · {relTime(when)}</small>
                             </div>
                             <div className="flex gap-2 shrink-0">
                               {media && (
-                                <button onClick={() => window.open(media, '_blank')} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Download</button>
+                                <button onClick={() => adminDownloadMedia(p)} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Download</button>
                               )}
                               {(adminPermissions ? adminPermissions.canDeletePosts : true) && (
                                 <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest">Remove</button>
@@ -4983,16 +5090,23 @@ function AdminDashboardModal({
                       <h2 className="text-2xl font-black font-display tracking-tight">Events &amp; details</h2>
                       <p className="text-sm opacity-60 mt-0.5">Set each event to Done, Next up or Upcoming. Guests see this on the Home timeline.</p>
                     </div>
-                    <button onClick={saveWedding} disabled={weddingBusy} className={`px-5 py-3 rounded-full text-[0.7rem] font-black uppercase tracking-widest bg-[#0E6B75] text-white ${weddingBusy ? 'opacity-60' : ''}`}>
-                      {weddingBusy ? 'Saving…' : 'Save changes'}
+                    {/* Saves everything, then opens the live website in a new tab. */}
+                    <button onClick={previewSite} disabled={weddingBusy} title="Saves your changes, then opens the website in a new tab" className={`px-5 py-3 rounded-full text-[0.7rem] font-black uppercase tracking-widest bg-[#0E6B75] text-white ${weddingBusy ? 'opacity-60' : ''}`}>
+                      {weddingBusy ? 'Saving…' : 'Preview site'}
                     </button>
                   </div>
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                    <h3 className="font-black font-display text-lg mb-3">Our story</h3>
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <h3 className="font-black font-display text-lg">Our story</h3>
+                      <button onClick={saveStory} disabled={weddingBusy} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest disabled:opacity-60 shrink-0">{weddingBusy ? 'Saving…' : 'Save'}</button>
+                    </div>
                     <textarea value={storyDraft} onChange={(e) => setStoryDraft(e.target.value)} rows={4} placeholder="How you met, in your own words." className={`w-full p-4 rounded-xl border-none outline-none text-sm leading-relaxed resize-y ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`} />
                   </div>
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                    <h3 className="font-black font-display text-lg mb-3">Wedding day details</h3>
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <h3 className="font-black font-display text-lg">Wedding day details</h3>
+                      <button onClick={saveDetails} disabled={weddingBusy} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest disabled:opacity-60 shrink-0">{weddingBusy ? 'Saving…' : 'Save'}</button>
+                    </div>
                     <div className="grid sm:grid-cols-2 gap-3">
                       {([['churchTime', 'Church time'], ['churchVenue', 'Church venue'], ['receptionTime', 'Reception time'], ['receptionVenue', 'Reception venue'], ['asoEbi', 'Aso-ebi'], ['hashtag', 'Hashtag']] as [string, string][]).map(([k, label]) => (
                         <label key={k} className="block">
@@ -5037,6 +5151,7 @@ function AdminDashboardModal({
                               </div>
                             </div>
                             <div className="flex gap-2">
+                              <button onClick={saveEvents} disabled={weddingBusy} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest disabled:opacity-60">{weddingBusy ? '…' : 'Save'}</button>
                               {i > 0 && (
                                 <button type="button" onClick={() => { const u = [...evDraft]; const t = u[i - 1]; u[i - 1] = u[i]; u[i] = t; setEvDraft(u); }} className="px-4 py-2 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.65rem] font-black uppercase tracking-widest">Move up</button>
                               )}
@@ -5062,9 +5177,9 @@ function AdminDashboardModal({
                     <div>
                       <div className="flex items-center justify-between mb-3">
                         <label className="block text-[0.7rem] uppercase tracking-widest font-black opacity-50">
-                          Hero Section Images ({heroImages.length} / 14)
+                          Hero photos ({heroShown.length} / 14)
                         </label>
-                        {heroImages.length > 0 && (
+                        {heroShown.length > 0 && (
                           <button
                             type="button"
                             onClick={() => onUpdateHeroImages([])}
@@ -5074,28 +5189,43 @@ function AdminDashboardModal({
                           </button>
                         )}
                       </div>
+                      {/* Label attached to every photo added from the tile below. */}
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <span className="text-[10px] font-black uppercase tracking-widest opacity-50">Label for new photos</span>
+                        <select value={newHeroLabel} onChange={(e) => setNewHeroLabel(e.target.value)} className="p-2 rounded-lg border border-[#DAD8E3] dark:border-[#22363E] bg-transparent text-xs font-bold">
+                          <option value="">No label</option>
+                          {(events || []).map((ev: any) => <option key={ev.id} value={ev.name}>{ev.name}</option>)}
+                        </select>
+                      </div>
                       <div className="grid grid-cols-4 gap-2 mb-4">
-                        {heroImages.slice(0, 14).map((img: string, idx: number) => (
+                        {heroShown.slice(0, 14).map((img: string, idx: number) => (
                           <div key={idx} className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 border dark:border-[#22363E] group">
                             <img src={img} className="w-full h-full object-cover" alt="" />
                             <div className="absolute top-1 right-1 flex gap-1">
                               {idx > 0 && (
-                                <button type="button" onClick={() => { const u = [...heroImages]; const t = u[idx - 1]; u[idx - 1] = u[idx]; u[idx] = t; onUpdateHeroImages(u); }} className="p-1 bg-black/70 text-white rounded-full" title="Move earlier">
+                                <button type="button" onClick={() => { const u = [...heroShown]; const t = u[idx - 1]; u[idx - 1] = u[idx]; u[idx] = t; onUpdateHeroImages(u); }} className="p-1 bg-black/70 text-white rounded-full" title="Move earlier">
                                   <ChevronLeft className="w-3 h-3" />
                                 </button>
                               )}
-                              {idx < heroImages.length - 1 && (
-                                <button type="button" onClick={() => { const u = [...heroImages]; const t = u[idx + 1]; u[idx + 1] = u[idx]; u[idx] = t; onUpdateHeroImages(u); }} className="p-1 bg-black/70 text-white rounded-full" title="Move later">
+                              {idx < heroShown.length - 1 && (
+                                <button type="button" onClick={() => { const u = [...heroShown]; const t = u[idx + 1]; u[idx + 1] = u[idx]; u[idx] = t; onUpdateHeroImages(u); }} className="p-1 bg-black/70 text-white rounded-full" title="Move later">
                                   <ChevronRight className="w-3 h-3" />
                                 </button>
                               )}
-                              <button type="button" onClick={() => onUpdateHeroImages(heroImages.filter((_: string, i: number) => i !== idx))} className="p-1 bg-black/70 text-white rounded-full" title="Remove image">
+                              <button type="button" onClick={() => onUpdateHeroImages(heroShown.filter((_: string, i: number) => i !== idx))} className="p-1 bg-black/70 text-white rounded-full" title="Remove image">
                                 <X className="w-3 h-3" />
                               </button>
                             </div>
+                            {/* Event label attached to this photo, editable any time. */}
+                            <div className="absolute bottom-0 inset-x-0 p-1 bg-black/55">
+                              <select value={heroImageLabels?.[img] || ''} onChange={(e) => onUpdateHeroLabels({ ...(heroImageLabels || {}), [img]: e.target.value })} className="w-full bg-transparent text-white text-[9px] font-bold outline-none" title="Photo label">
+                                <option value="" className="text-black">No label</option>
+                                {(events || []).map((ev: any) => <option key={ev.id} value={ev.name} className="text-black">{ev.name}</option>)}
+                              </select>
+                            </div>
                           </div>
                         ))}
-                        {heroImages.length < 14 && (
+                        {heroShown.length < 14 && (
                           <label className="aspect-square rounded-lg border-2 border-dashed border-[#0E6B75]/30 flex flex-col items-center justify-center cursor-pointer hover:bg-[#0E6B75]/5 transition-colors">
                             <input 
                               type="file" 
@@ -5107,7 +5237,7 @@ function AdminDashboardModal({
                                 const files = Array.from(e.target.files || []);
                                 if (files.length === 0) return;
 
-                                const remainingSlots = 14 - heroImages.length;
+                                const remainingSlots = 14 - heroShown.length;
                                 const filesToUpload = files.slice(0, remainingSlots);
                                 if (files.length > remainingSlots) {
                                   showToast(`Maximum 14 hero images allowed. Uploading first ${remainingSlots}.`, 'info');
@@ -5124,7 +5254,13 @@ function AdminDashboardModal({
                                   }
                                   
                                   if (uploadedUrls.length > 0) {
-                                    onUpdateHeroImages([...heroImages, ...uploadedUrls].slice(0, 14));
+                                    onUpdateHeroImages([...heroShown, ...uploadedUrls].slice(0, 14));
+                                    // Attach the chosen label to every newly added photo.
+                                    if (newHeroLabel) {
+                                      const labelMap = { ...(heroImageLabels || {}) };
+                                      uploadedUrls.forEach((u) => { labelMap[u] = newHeroLabel; });
+                                      onUpdateHeroLabels(labelMap);
+                                    }
                                   }
                                 } catch (err: any) {
                                   console.error("Bulk upload error:", err);
@@ -5139,14 +5275,14 @@ function AdminDashboardModal({
                               <RefreshCw className="w-5 h-5 text-[#0E6B75] animate-spin" />
                             ) : (
                               <>
-                                <ImageIcon className="w-5 h-5 text-[#0E6B75]" />
-                                <span className="text-[10px] font-bold mt-1 uppercase">Add ({14 - heroImages.length})</span>
+                                <Plus className="w-5 h-5 text-[#0E6B75]" />
+                                <span className="text-[10px] font-bold mt-1 uppercase">Add ({14 - heroShown.length})</span>
                               </>
                             )}
                           </label>
                         )}
                       </div>
-                      <p className="text-[0.75rem] opacity-60 italic">Upload up to 14 images for the hero banner (scrolls 2 images at a time).</p>
+                      <p className="text-[0.75rem] opacity-60 italic">Upload up to 14 images for the hero banner (scrolls 2 images at a time).{!heroImages.length && ' These are the placeholder photos currently on the website: remove any of them or add your own, and your list takes over the hero.'}</p>
                     </div>
                   )}
 
@@ -5235,50 +5371,6 @@ function AdminDashboardModal({
                     </div>
                   )}
                   </div>
-                </div>
-              )}
-
-              {activeAdminTab === 'guests' && (
-                <div className="space-y-8">
-                  <div>
-                    <h2 className="text-2xl font-black font-display tracking-tight">Guests &amp; vendors</h2>
-                    <p className="text-sm opacity-60 mt-0.5">People join without an account. This list shows everyone who has posted.</p>
-                  </div>
-                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                    <h3 className="font-black font-display text-lg mb-3">People who have posted</h3>
-                    <div className="space-y-3">
-                      {(() => {
-                        const byKey: Record<string, { name: string; uid: string; count: number }> = {};
-                        posts.forEach((p: any) => {
-                          const uid = p.authorUid || `name:${(p.authorName || '').trim().toLowerCase()}`;
-                          if (!byKey[uid]) byKey[uid] = { name: (p.authorName || 'A guest').trim() || 'A guest', uid, count: 0 };
-                          byKey[uid].count += 1;
-                        });
-                        const rows = Object.values(byKey).sort((a, b) => b.count - a.count);
-                        if (rows.length === 0) return <p className="opacity-50 text-sm">No posts yet, so nobody has shown up here.</p>;
-                        return rows.map((r) => {
-                          const isVendor = (vendors || []).includes(r.uid);
-                          const isBlocked = (blockedUids || []).includes(r.uid);
-                          return (
-                            <div key={r.uid} className="flex items-center justify-between gap-3">
-                              <div className="flex items-center gap-3 min-w-0">
-                                <div className="w-9 h-9 rounded-xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black text-sm shrink-0">{r.name.charAt(0).toUpperCase()}</div>
-                                <div className="min-w-0 flex items-center gap-2">
-                                  <b className="text-[0.95rem] truncate">{r.name}</b>
-                                  <span className={`px-2 py-0.5 rounded-full text-[0.6rem] font-black uppercase tracking-widest shrink-0 ${isVendor ? 'bg-[#C8932A]/20 text-[#C8932A]' : 'bg-black/5 dark:bg-white/10 opacity-70'}`}>{isVendor ? 'Vendor' : 'Guest'}</span>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-3 shrink-0">
-                                <span className="opacity-60 text-sm font-bold">{r.count} {r.count === 1 ? 'post' : 'posts'}</span>
-                                <button onClick={() => onUpdatePeople(isBlocked ? { blockedUids: (blockedUids || []).filter((u: string) => u !== r.uid) } : { blockedUids: [...(blockedUids || []), r.uid] })} className={`px-4 py-2 rounded-full text-[0.65rem] font-black uppercase tracking-widest ${isBlocked ? 'bg-[#1F8A5B] text-white' : 'border border-[#C4453B]/40 text-[#C4453B]'}`}>{isBlocked ? 'Unblock' : 'Block'}</button>
-                              </div>
-                            </div>
-                          );
-                        });
-                      })()}
-                    </div>
-                  </div>
-                  <p className="text-sm opacity-50">Vendor status comes only from approving a request in Moderation. There is no &ldquo;make vendor&rdquo; button here.</p>
                 </div>
               )}
 
@@ -5812,6 +5904,11 @@ function AdminDashboardModal({
                     </div>
                   ))}
                 </div>
+              )}
+
+              {/* Admin preview: watch a video or view a photo from All posts full-screen. */}
+              {adminViewerPost && (
+                <MediaLightbox post={adminViewerPost} initialIndex={0} isDarkMode={isDarkMode} onClose={() => setAdminViewerPost(null)} />
               )}
             </div>
 
