@@ -893,6 +893,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       }
       
       await batch.commit();
+      showToast(isActive ? 'Reaction removed' : 'Reaction added');
     } catch (err) {
       console.error("Reaction error:", err);
       showToast("Reaction failed. Please try again.", "error");
@@ -2998,6 +2999,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           displayName={displayName}
           avatar={avatar}
           isAdmin={isAdmin}
+          showToast={showToast}
           onClose={() => setCommentsPost(null)}
         />
       )}
@@ -3591,7 +3593,6 @@ function PostAdCard({ ad, isDarkMode }: { ad: AdItem; isDarkMode: boolean; [key:
 
 function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete, onLike, onLove, onShare, onComment, onAvatarClick }: any) {
   const [activeIndex, setActiveIndex] = useState(0);
-  const [isMuted, setIsMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Snap-locked reels: the next video is only seen when swiping up.
@@ -3633,8 +3634,6 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
           key={reel.id}
           reel={reel}
           isActive={idx === activeIndex}
-          isMuted={isMuted}
-          onToggleMute={() => setIsMuted(!isMuted)}
           isAdmin={isAdmin}
           user={user}
           onDelete={() => onDelete(reel.id)}
@@ -3653,8 +3652,6 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
 function ReelCard({
   reel,
   isActive,
-  isMuted,
-  onToggleMute,
   isAdmin,
   user,
   onDelete,
@@ -3667,6 +3664,7 @@ function ReelCard({
 }: any) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(true);
+  const [muted, setMuted] = useState(false);
   const [localLiked, setLocalLiked] = useState(false);
   const [localLoved, setLocalLoved] = useState(false);
 
@@ -3710,11 +3708,11 @@ function ReelCard({
     // as a last resort.
     vid.currentTime = 0;
     vid.muted = false;
-    setIsMuted(false);
+    setMuted(false);
     const attempt = () => {
       vid.play().then(() => setIsPlaying(true)).catch(() => {
         vid.muted = true;
-        setIsMuted(true);
+        setMuted(true);
         vid.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
       });
     };
@@ -3762,7 +3760,7 @@ function ReelCard({
         className="w-full h-full object-cover cursor-pointer"
         loop
         playsInline
-        muted={isMuted}
+        muted={muted}
         onClick={togglePlay}
       />
       )}
@@ -3790,10 +3788,10 @@ function ReelCard({
         </div>
         <div className="flex items-center gap-2 pointer-events-auto">
           <button
-            onClick={onToggleMute}
+            onClick={() => setMuted(!muted)}
             className="p-2.5 rounded-full bg-black/50 text-white backdrop-blur-md hover:bg-black/70 transition-colors"
           >
-            {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
         </div>
       </div>
@@ -4034,7 +4032,7 @@ function SamplePostCard({ post, isDarkMode, liked, onLike, onComment, onShare }:
     </article>
   );
 }
-function CommentsSheet({ post, isDarkMode, user, displayName, avatar, isAdmin, onClose }: any) {
+function CommentsSheet({ post, isDarkMode, user, displayName, avatar, isAdmin, showToast, onClose }: any) {
   const isSample = String(post?.id || '').startsWith('sample-');
   const [comments, setComments] = useState<any[]>(isSample ? (SAMPLE_COMMENTS[post.id] || []) : []);
   const [text, setText] = useState('');
@@ -4067,8 +4065,10 @@ function CommentsSheet({ post, isDarkMode, user, displayName, avatar, isAdmin, o
         await updateDoc(doc(db, 'posts', post.id), { commentCount: increment(1) });
       }
       setText('');
+      if (showToast) showToast('Comment added');
     } catch (err) {
       console.error('comment failed', err);
+      if (showToast) showToast('Could not post the comment. Try again.', 'error');
     } finally {
       setSending(false);
     }
@@ -4310,10 +4310,9 @@ function DeleteConfirmationModal({ isOpen, onClose, onConfirm, isDarkMode }: any
 }
 
 
-function AuthScreen({ screen, setScreen, onClose, onSignIn, onSignup, onForgot, busy, error, clearError, isDarkMode }: {
+function AuthScreen({ screen, setScreen, onSignIn, onSignup, onForgot, busy, error, clearError, isDarkMode }: {
   screen: 'signin' | 'forgot' | 'sent';
   setScreen: (s: 'signin' | 'forgot' | 'sent') => void;
-  onClose: () => void;
   onSignIn: (email: string, password: string) => void;
   onSignup: (email: string, password: string) => void;
   onForgot: (email: string) => void;
@@ -4335,10 +4334,6 @@ function AuthScreen({ screen, setScreen, onClose, onSignIn, onSignup, onForgot, 
   return (
     <div className={`fixed inset-0 z-[300] flex items-center justify-center p-5 overflow-y-auto ${isDarkMode ? 'bg-[#0B171C]' : 'bg-[#F6F5FA]'}`}>
       <div className={`w-full max-w-[430px] my-auto rounded-[28px] p-8 shadow-2xl ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}>
-        <button onClick={onClose} className={`mb-5 p-2 -ml-2 rounded-full hover:bg-black/5 ${isDarkMode ? 'text-[#5A6970]' : 'text-[#5A6970]'}`} aria-label="Close">
-          <X className="w-6 h-6" />
-        </button>
-
         {screen === 'sent' ? (
           <>
             <div className="w-16 h-16 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center mx-auto mb-5">
@@ -4682,6 +4677,41 @@ function AdminDashboardModal({
   const [inviteRole, setInviteRole] = useState('vendor');
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteResult, setInviteResult] = useState<{ email: string; tempPassword: string } | null>(null);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteStep, setInviteStep] = useState<'form' | 'done'>('form');
+  const [invitePerms, setInvitePerms] = useState<Record<string, boolean>>({ canDeletePosts: false, canUploadImages: true, canSetAccessCode: false });
+
+  const openInviteModal = () => {
+    setInviteEmail('');
+    setInviteRole('vendor');
+    setInvitePerms({ canDeletePosts: false, canUploadImages: true, canSetAccessCode: false });
+    setInviteResult(null);
+    setInviteStep('form');
+    setShowInviteModal(true);
+  };
+
+  const applyInviteRole = (r: string) => {
+    setInviteRole(r);
+    setInvitePerms(r === 'couple'
+      ? { canDeletePosts: true, canUploadImages: true, canSetAccessCode: true }
+      : { canDeletePosts: false, canUploadImages: true, canSetAccessCode: false });
+  };
+
+  // Team list with the signed-in admin always present, plus self markers.
+  const teamList = useMemo(() => {
+    const list = (allAdmins as any[]).map((a: any) => ({ ...a, isSelf: a.email === currentUserEmail }));
+    if (currentUserEmail && !list.some((a: any) => a.isSelf)) {
+      list.push({
+        id: '__self__',
+        email: currentUserEmail,
+        role: (myAdminDoc as any)?.role || 'couple',
+        mustSetPassword: false,
+        permissions: (myAdminDoc as any)?.permissions || { canDeletePosts: true, canUploadImages: true, canSetAccessCode: true },
+        isSelf: true
+      });
+    }
+    return list;
+  }, [allAdmins, currentUserEmail, myAdminDoc]);
 
   // Super Admin Ad Creation & Editing State
   const [adTypeTab, setAdTypeTab] = useState<'post' | 'reel'>('post');
@@ -4708,7 +4738,7 @@ function AdminDashboardModal({
 
   const daysToWedding = Math.max(0, Math.ceil((new Date(`${WEDDING_DATE}T11:00:00`).getTime() - Date.now()) / 86400000));
 
-  const inviteDashboardAccess = async () => {
+  const inviteDashboardAccess = async (perms: Record<string, boolean>) => {
     const email = inviteEmail.trim();
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       showToast('Enter a valid email address.', 'error');
@@ -4726,13 +4756,12 @@ function AdminDashboardModal({
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        const rolePerms: any = inviteRole === 'couple'
-          ? { canDeletePosts: true, canUploadImages: true, canSetAccessCode: true }
-          : { canDeletePosts: false, canUploadImages: true, canSetAccessCode: false };
+        const rolePerms: any = { ...perms };
         try {
           await setDoc(doc(db, 'admins', email.toLowerCase().trim()), {
             email: email.toLowerCase().trim(),
             role: inviteRole,
+            mustSetPassword: true,
             permissions: rolePerms,
             addedAt: serverTimestamp(),
             addedBy: currentUserEmail
@@ -4741,6 +4770,7 @@ function AdminDashboardModal({
           console.error('Admin doc write error:', permErr);
         }
         setInviteResult({ email, tempPassword });
+        setInviteStep('done');
         setInviteEmail('');
         showToast('Dashboard access created. Share the temporary password now.', 'success');
       } else {
@@ -4904,8 +4934,10 @@ function AdminDashboardModal({
     if (confirm(`Remove ${email} from administrators?`)) {
       try {
         await deleteDoc(doc(db, 'admins', email));
+        showToast(`${email} removed from administrators.`);
       } catch (err) {
         console.error("Remove admin error:", err);
+        showToast('Could not remove that administrator.', 'error');
       }
     }
   };
@@ -4918,8 +4950,10 @@ function AdminDashboardModal({
           [perm]: !currentVal
         }
       }, { merge: true });
+      showToast('Permissions updated.');
     } catch (err) {
       console.error("Toggle permission error:", err);
+      showToast('Could not update the permission.', 'error');
     }
   };
   
@@ -5728,80 +5762,133 @@ function AdminDashboardModal({
                   </div>
                   {isSuper && (
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                    <h3 className="font-black font-display text-lg mb-4">Administrators</h3>
-                    <div className="space-y-6">
-                      <div>
-                        <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Invite a team member</label>
-                        <div className="flex gap-2 flex-wrap mb-3">
-                          {([['couple', 'Couple'], ['photographer', 'Photographer'], ['vendor', 'Vendor']] as [string, string][]).map(([r, label]) => (
-                            <button key={r} type="button" onClick={() => setInviteRole(r)} className={`px-4 py-2.5 rounded-xl text-[0.7rem] font-black uppercase tracking-widest border transition-colors ${inviteRole === r ? 'bg-[#0E6B75] text-white border-[#0E6B75]' : (isDarkMode ? 'border-[#22363E] text-[#93A4AB]' : 'border-[#DAD8E3] text-[#5A6970]')}`}>{label}</button>
-                          ))}
-                        </div>
-                        <div className="flex gap-2">
-                          <input
-                            type="email"
-                            value={inviteEmail}
-                            onChange={(e) => setInviteEmail(e.target.value)}
-                            placeholder="name@email.com"
-                            className={`flex-1 p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
-                          />
-                          <button onClick={inviteDashboardAccess} disabled={inviteBusy} className="px-6 rounded-xl bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest disabled:opacity-50">
-                            {inviteBusy ? 'Creating…' : 'Invite'}
-                          </button>
-                        </div>
-                        <p className="text-[0.7rem] opacity-50 mt-2">
-                          {inviteRole === 'couple'
-                            ? 'Couples get the full dashboard: every section and every action.'
-                            : 'Photographers and vendors can sign in and upload to Photo albums only. Everything they add carries their name and the upload date.'}
-                        </p>
-                      </div>
-                      {inviteResult && (
-                        <div className="p-4 rounded-xl bg-[#C8932A]/10 border border-[#C8932A]/30">
-                          <p className="text-sm font-bold">Share this temporary password now. It shows only once.</p>
-                          <div className="flex items-center gap-3 mt-2 flex-wrap">
-                            <code className="px-3 py-2 rounded-lg bg-black/10 font-black tracking-widest">{inviteResult.tempPassword}</code>
-                            <span className="text-sm opacity-70">for {inviteResult.email}</span>
-                            <button
-                              onClick={() => { navigator.clipboard?.writeText(inviteResult.tempPassword); showToast('Temporary password copied'); }}
-                              className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest"
-                            >
-                              Copy
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                      <div className="space-y-4">
-                        <h4 className="text-[0.7rem] uppercase tracking-widest font-black opacity-50">Current team</h4>
-                        {allAdmins.map((adm) => (
-                          <div key={adm.id} className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#F8F8FA] border-[#DAD8E3]'}`}>
-                            <div className="flex items-center justify-between mb-3 gap-2">
-                              <span className="font-bold text-sm break-all">{adm.email}</span>
+                    <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                      <h3 className="font-black font-display text-lg">Administrators</h3>
+                      <button onClick={openInviteModal} className="px-5 py-2.5 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest shadow-md flex items-center gap-2">
+                        <User className="w-4 h-4" />
+                        Invite admin
+                      </button>
+                    </div>
+                    <div className="space-y-4">
+                      <h4 className="text-[0.7rem] uppercase tracking-widest font-black opacity-50">Current team</h4>
+                      {teamList.map((adm: any) => (
+                        <div key={adm.id} className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#F8F8FA] border-[#DAD8E3]'}`}>
+                          <div className="flex items-center justify-between mb-3 gap-2">
+                            <span className="font-bold text-sm break-all">{adm.email}{adm.isSelf ? ' (you)' : ''}</span>
+                            {!adm.isSelf && (
                               <button onClick={() => handleRemoveAdmin(adm.email)} className="text-red-500 p-1 hover:bg-red-500/10 rounded-lg shrink-0" title="Remove">
                                 <Trash2 className="w-4 h-4" />
                               </button>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border ${adm.role === 'couple' || !adm.role ? 'bg-[#0E6B75] border-[#0E6B75] text-white' : 'bg-[#C8932A] border-[#C8932A] text-white'}`}>
-                                {adm.role === 'photographer' ? 'Photographer' : adm.role === 'vendor' ? 'Vendor' : 'Couple'}
-                              </span>
-                              {(!adm.role || adm.role === 'couple') && [
-                                { id: 'canDeletePosts', label: 'Delete Posts' },
-                                { id: 'canUploadImages', label: 'Upload Images' },
-                                { id: 'canSetAccessCode', label: 'Access Code' }
-                              ].map((p: any) => (
-                                <button
-                                  key={p.id}
-                                  onClick={() => togglePermission(adm.email, p.id, adm.permissions?.[p.id])}
-                                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${adm.permissions?.[p.id] ? 'bg-[#0E6B75] border-[#0E6B75] text-white shadow-md' : 'opacity-40 border-current'}`}
-                                >
-                                  {p.label}
-                                </button>
-                              ))}
-                            </div>
+                            )}
                           </div>
-                        ))}
-                      </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border ${adm.role === 'couple' || !adm.role || adm.role === 'admin' ? 'bg-[#0E6B75] border-[#0E6B75] text-white' : 'bg-[#C8932A] border-[#C8932A] text-white'}`}>
+                              {adm.role === 'photographer' ? 'Photographer' : adm.role === 'vendor' ? 'Vendor' : 'Couple'}
+                            </span>
+                            {adm.mustSetPassword === true ? (
+                              <span className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border bg-[#C8932A]/10 text-[#C8932A] border-[#C8932A]/40">Invited</span>
+                            ) : (
+                              <span className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border bg-[#0E6B75]/10 text-[#0E6B75] border-[#0E6B75]/40">Active</span>
+                            )}
+                            {(!adm.role || adm.role === 'couple' || adm.role === 'admin') && [
+                              { id: 'canDeletePosts', label: 'Delete Posts' },
+                              { id: 'canUploadImages', label: 'Upload Images' },
+                              { id: 'canSetAccessCode', label: 'Access Code' }
+                            ].map((p: any) => (
+                              <button
+                                key={p.id}
+                                onClick={() => togglePermission(adm.email, p.id, adm.permissions?.[p.id])}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${adm.permissions?.[p.id] ? 'bg-[#0E6B75] border-[#0E6B75] text-white shadow-md' : 'opacity-40 border-current'}`}
+                              >
+                                {p.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
                     </div>
+                    <AnimatePresence>
+                      {showInviteModal && (
+                        <>
+                          <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setShowInviteModal(false)}
+                            className="fixed inset-0 bg-black/60 z-[200] backdrop-blur-sm"
+                          />
+                          <motion.div
+                            initial={{ opacity: 0, y: 24, scale: 0.97 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 24, scale: 0.97 }}
+                            className={`fixed z-[201] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100vw-2rem)] max-w-[480px] max-h-[85vh] overflow-y-auto rounded-[28px] p-6 shadow-2xl ${isDarkMode ? 'bg-[#13232A] border border-[#22363E] text-white' : 'bg-white border border-[#DAD8E3] text-[#14262D]'}`}
+                          >
+                            {inviteStep === 'form' ? (
+                              <>
+                                <div className="flex items-start justify-between gap-3 mb-4">
+                                  <div>
+                                    <h4 className="font-black font-display text-lg">Invite an administrator</h4>
+                                    <p className="text-[0.8rem] opacity-60 mt-1">Choose what they can see and do, then share their temporary password.</p>
+                                  </div>
+                                  <button onClick={() => setShowInviteModal(false)} aria-label="Close" className={`p-2 rounded-full shrink-0 ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-black/5'}`}>
+                                    <X className="w-5 h-5" />
+                                  </button>
+                                </div>
+                                <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Who are they?</label>
+                                <div className="grid grid-cols-3 gap-2 mb-4">
+                                  {([['couple', 'Couple', 'Full dashboard'], ['photographer', 'Photographer', 'Photo albums'], ['vendor', 'Vendor', 'Photo albums']] as [string, string, string][]).map(([r, label, sub]) => (
+                                    <button key={r} type="button" onClick={() => applyInviteRole(r)} className={`p-3 rounded-2xl border text-left transition-all ${inviteRole === r ? 'bg-[#0E6B75] text-white border-[#0E6B75] shadow-md' : (isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]')}`}>
+                                      <span className="block text-[0.65rem] font-black uppercase tracking-widest">{label}</span>
+                                      <span className={`block text-[0.6rem] mt-1 ${inviteRole === r ? 'text-white/70' : 'opacity-50'}`}>{sub}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                                <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Their email</label>
+                                <input
+                                  type="email"
+                                  value={inviteEmail}
+                                  onChange={(e) => setInviteEmail(e.target.value)}
+                                  placeholder="name@email.com"
+                                  className={`w-full p-4 rounded-xl border-none outline-none font-bold mb-4 ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+                                />
+                                <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">What they can see and do</label>
+                                <div className="space-y-2 mb-5">
+                                  {([['canUploadImages', 'Upload photos & videos', 'Add memories to the albums and the feed'], ['canDeletePosts', 'Delete posts & reels', 'Remove anything from the feed'], ['canSetAccessCode', 'Manage the access code', 'Change the guest code and app settings']] as [string, string, string][]).map(([pid, label, sub]) => (
+                                    <button key={pid} type="button" onClick={() => setInvitePerms((prev) => ({ ...prev, [pid]: !prev[pid] }))} className={`w-full flex items-center justify-between gap-3 p-3.5 rounded-2xl border text-left transition-all ${invitePerms[pid] ? (isDarkMode ? 'bg-[#0E6B75]/20 border-[#0E6B75]' : 'bg-[#0E6B75]/5 border-[#0E6B75]') : (isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]')}`}>
+                                      <span>
+                                        <span className="block text-[0.85rem] font-bold">{label}</span>
+                                        <span className="block text-[0.7rem] opacity-50">{sub}</span>
+                                      </span>
+                                      <span className={`w-5 h-5 rounded-full border-2 grid place-items-center shrink-0 ${invitePerms[pid] ? 'bg-[#0E6B75] border-[#0E6B75]' : 'border-current opacity-40'}`}>
+                                        {invitePerms[pid] && <Check className="w-3 h-3 text-white" />}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                                <button onClick={() => inviteDashboardAccess(invitePerms)} disabled={inviteBusy} className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest shadow-lg disabled:opacity-50">
+                                  {inviteBusy ? 'Creating account…' : 'Create account & send invite'}
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <div className="w-14 h-14 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] grid place-items-center mx-auto mb-4">
+                                  <Check className="w-7 h-7" />
+                                </div>
+                                <h4 className="text-center font-black font-display text-lg">{inviteResult?.email} is invited</h4>
+                                <p className="text-center text-[0.8rem] opacity-60 mt-1 mb-4">Share this temporary password now. It shows only once, and they will choose their own password the first time they sign in.</p>
+                                <div className="p-4 rounded-2xl bg-[#C8932A]/10 border border-[#C8932A]/30 text-center mb-4">
+                                  <code className="text-xl font-black tracking-[0.25em]">{inviteResult?.tempPassword}</code>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={() => { navigator.clipboard?.writeText(inviteResult?.tempPassword || ''); showToast('Temporary password copied'); }} className="flex-1 py-3.5 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest">Copy password</button>
+                                  <button onClick={() => setShowInviteModal(false)} className={`flex-1 py-3.5 rounded-full border text-[0.7rem] font-black uppercase tracking-widest ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>Done</button>
+                                </div>
+                              </>
+                            )}
+                          </motion.div>
+                        </>
+                      )}
+                    </AnimatePresence>
                   </div>
                   )}
                   <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
@@ -6353,8 +6440,25 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset
 
 function FloatingHeroSection({ isDarkMode, images, eventNames }: { isDarkMode: boolean, images: string[], eventNames?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [cardsReady, setCardsReady] = useState(false);
 
   const baseImages = images.length > 0 ? images : PLACEHOLDER_IMAGES;
+  const baseKey = baseImages.join('|');
+
+  // Keep every hero image warm in the browser cache, and only mount the cards
+  // once the first batch has loaded, so pictures never pop in or out.
+  useEffect(() => {
+    let cancelled = false;
+    baseImages.forEach((src: string) => {
+      const img = new Image();
+      const done = () => { if (!cancelled) setCardsReady(true); };
+      img.onload = done;
+      img.onerror = done;
+      img.src = src;
+    });
+    const fallback = setTimeout(() => { if (!cancelled) setCardsReady(true); }, 2000);
+    return () => { cancelled = true; clearTimeout(fallback); };
+  }, [baseKey]);
 
   return (
     <section
@@ -6366,7 +6470,7 @@ function FloatingHeroSection({ isDarkMode, images, eventNames }: { isDarkMode: b
       </div>
 
       <div className="absolute inset-0 overflow-hidden">
-        {[0, 1].map((column) =>
+        {cardsReady && [0, 1].map((column) =>
           [0, 1, 2, 3].map((slot) => (
             <FloatingPhotoCard
               key={`hero-${column}-${slot}`}
