@@ -2295,6 +2295,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         approveGuestPosts={approveGuestPosts}
         pushEnabled={pushEnabled}
         archiveMode={archiveMode}
+        feedActionMode={feedActionMode}
         onUpdateAppFlags={updateAppConfigFlags}
         onDownloadEverything={downloadEverything}
         onCreateMemoryBook={createMemoryBook}
@@ -4434,6 +4435,7 @@ function AdminDashboardModal({
   approveGuestPosts,
   pushEnabled,
   archiveMode,
+  feedActionMode,
   onUpdateAppFlags,
   onDownloadEverything,
   onCreateMemoryBook,
