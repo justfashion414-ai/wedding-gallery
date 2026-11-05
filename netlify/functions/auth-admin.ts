@@ -307,6 +307,7 @@ export const handler = async (event: any) => {
       // so an unauthenticated trigger cannot alter anything: worst case it re-publishes
       // the same intended rules. Returns the new ruleset and release state.
       const token = await getAccessToken();
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
       const createRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/rulesets`, {
         method: 'POST', headers, body: JSON.stringify({ source: { files: [{ name: 'firestore.rules', content: RULES_SOURCE }] } })
       });
