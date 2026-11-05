@@ -2118,6 +2118,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               exit={{ opacity: 0 }}
               className="space-y-0"
             >
+              <TabErrorBoundary label="Settings (guest page)" isDarkMode={isDarkMode}>
               <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[14px_4px_12px] leading-[1.25]">Guest Profile</h2>
               <div className={`p-[24px_18px] rounded-[24px] border mb-6 flex flex-col items-center gap-6 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                 <div className="relative group">
@@ -2266,6 +2267,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   </button>
                 </div>
               )}
+              </TabErrorBoundary>
             </motion.div>
           )}
         </AnimatePresence>
@@ -4376,6 +4378,29 @@ function ForceSetPasswordScreen({ isDarkMode, busy, error, newPassword, setNewPa
   );
 }
 
+// Renders the actual error message instead of a blank page when a section's
+// rendering fails, so a crash is always visible and fixable.
+class TabErrorBoundary extends React.Component<{ label: string; isDarkMode: boolean; children: any }, { error: any }> {
+  state = { error: null as any };
+  static getDerivedStateFromError(error: any) { return { error }; }
+  componentDidCatch(error: any, info: any) {
+    console.error(`Section "${this.props.label}" failed to render:`, error, info);
+  }
+  render() {
+    if (this.state.error) {
+      const msg = String(this.state.error?.message || this.state.error || 'Unknown error');
+      return (
+        <div className={`p-5 rounded-[20px] border border-[#C4453B]/40 ${this.props.isDarkMode ? 'bg-[#C4453B]/10' : 'bg-[#C4453B]/5'}`}>
+          <h3 className="font-black font-display text-lg text-[#C4453B] mb-1">This section could not load</h3>
+          <p className="text-sm opacity-70 mb-2">Section: {this.props.label}. Send the text below to your assistant to get it fixed.</p>
+          <code className="block p-3 rounded-lg bg-black/10 text-[0.7rem] break-words whitespace-pre-wrap">{msg}</code>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function AdminDashboardModal({ 
   isOpen, 
   asPage, 
@@ -4849,6 +4874,7 @@ function AdminDashboardModal({
 
               {/* Modal Body */}
               <div className="flex-1 overflow-y-auto p-6 md:p-8 pt-6">
+              <TabErrorBoundary label={activeAdminTab} isDarkMode={isDarkMode}>
               {activeAdminTab === 'overview' && (
                 <div className="space-y-6">
                   <div>
@@ -5912,6 +5938,7 @@ function AdminDashboardModal({
               {adminViewerPost && (
                 <MediaLightbox post={adminViewerPost} initialIndex={0} isDarkMode={isDarkMode} onClose={() => setAdminViewerPost(null)} />
               )}
+              </TabErrorBoundary>
             </div>
 
             </div>
