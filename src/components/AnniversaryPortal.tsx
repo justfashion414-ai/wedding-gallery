@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence, useAnimationFrame, useMotionValue } from 'motion/react';
 import { 
   Home, 
+  Globe, 
   Plus, 
   Settings, 
   X, 
@@ -23,6 +24,7 @@ import {
   Play,
   Pause,
   ChevronLeft,
+  Menu,
   ChevronRight,
   ExternalLink,
   MessageSquare,
@@ -31,16 +33,18 @@ import {
   User,
   Camera,
   Check,
-  Users,
   Trash,
   Megaphone,
   Edit3,
-  Download
+  Download,
+  Maximize2,
+  Minimize2,
+  Mail,
+  Images
 } from 'lucide-react';
-import AnniversarySection from './AnniversarySection';
 import { db, auth } from '../lib/firebase';
 import { get, set, del } from 'idb-keyval';
-import { signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, updatePassword, signOut } from 'firebase/auth';
 import { 
   collection, 
   query, 
@@ -53,7 +57,9 @@ import {
   deleteDoc,
   serverTimestamp,
   writeBatch,
-  increment
+  increment,
+  updateDoc,
+  getDocs
 } from 'firebase/firestore';
 
 
@@ -63,7 +69,11 @@ import {
   LogOut, 
   ShieldCheck, 
   RefreshCw,
-  Save
+  Save,
+  Eye,
+  EyeOff,
+  KeyRound,
+  MessageCircle,
 } from 'lucide-react';
 
 enum OperationType {
@@ -133,14 +143,69 @@ export interface AdItem {
   createdAt?: number;
 }
 
-const DAYS_DATA = [
-  { l: "Mon", n: "30", events: [{ h: 9, t: "9:00am", title: "Road Show", v: "Estate Road & Surroundings" }] },
-  { l: "Tue", n: "1", events: [{ h: 10, t: "10:00am", title: "Health Talk / Medical Outreach", v: "Clubhouse Hall" }] },
-  { l: "Wed", n: "2", events: [{ h: 16, t: "4:00pm", title: "Novelty Match", v: "Estate Field" }] },
-  { l: "Thu", n: "3", events: [{ h: 16, t: "4:00pm", title: "Novelty Match Final", v: "Estate Field" }] },
-  { l: "Fri", n: "4", events: [{ h: 13, t: "1:00pm", title: "Jumat Prayer", v: "Central Mosque" }, { h: 16, t: "4:00pm", title: "Indoor Games", v: "Clubhouse" }] },
-  { l: "Sat", n: "5", events: [{ h: 7, t: "7:00am", title: "Health Walk", v: "Estate Road" }, { h: 11, t: "11:00am", title: "Interdenominational Prayer", v: "Clubhouse" }, { h: 17, t: "5:00pm", title: "Grand Finale", v: "Clubhouse Lawn" }] },
-  { l: "Sun", n: "6", events: [{ h: 9, t: "9:00am", title: "Thanksgiving Service", v: "Clubhouse Hall" }] }
+interface WeddingEvent {
+  id: string;
+  name: string;
+  type: string;
+  date: string; // YYYY-MM-DD
+  time?: string; // 24h HH:MM
+  desc: string;
+  venue?: string;
+  status?: 'done' | 'next' | 'up';
+}
+
+const WEDDING_DATE = '2026-12-12';
+const WEDDING_TIME = '11:00';
+
+const EVENTS_DATA: WeddingEvent[] = [
+  { id: 'intro', name: 'Introduction', type: 'Traditional introduction', date: '2026-06-20', desc: 'Both families meet, gifts are exchanged and the journey becomes official.' },
+  { id: 'engage', name: 'Engagement', type: 'Engagement ceremony', date: '2026-07-18', desc: 'The ring, the yes and the first big celebration together.' },
+  { id: 'court', name: 'Court Wedding', type: 'Registry', date: '2026-08-28', desc: 'Signing the register with our closest people.' },
+  { id: 'shower', name: 'Bridal Shower', type: "Dara's party", date: '2026-11-21', desc: 'An afternoon of games, gifts and girls with the bride.' },
+  { id: 'stag', name: "Groom's Party", type: "Femi's party", date: '2026-11-28', desc: 'The groomsmen send Femi off in style.' },
+  { id: 'church', name: 'Church Wedding', type: 'Holy matrimony', date: '2026-12-12', time: '11:00', desc: 'Vows before God, family and friends.' },
+  { id: 'reception', name: 'Reception', type: 'Hall celebration', date: '2026-12-12', time: '15:00', desc: 'Food, music, aso-ebi and the first dance.' },
+  { id: 'thanks', name: 'Thanksgiving', type: 'Thanksgiving service', date: '2026-12-13', desc: 'We close the weekend giving thanks together.' },
+];
+
+// Journey status is SET BY THE COUPLE in the dashboard (Done / Next up / Upcoming).
+// This helper only seeds statuses the first time the config is written; it is
+// never used to compute what guests see at render time.
+const seedEventStatuses = (): Record<string, 'done' | 'next' | 'up'> => {
+  const now = Date.now();
+  let nextFound = false;
+  const out: Record<string, 'done' | 'next' | 'up'> = {};
+  EVENTS_DATA.forEach((e) => {
+    const t = new Date(`${e.date}T${e.time || '12:00'}:00`).getTime();
+    if (t < now) { out[e.id] = 'done'; return; }
+    if (!nextFound) { nextFound = true; out[e.id] = 'next'; return; }
+    out[e.id] = 'up';
+  });
+  return out;
+};
+
+const fmtEventDate = (e: { date: string; time?: string }) =>
+  new Date(`${e.date}T${e.time || '12:00'}:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+const DEFAULT_STORY = "Dara and Femi met at a friend's book launch in 2022. Four years, two families and one very patient pastor later, here we are. This page keeps every moment of it in one place, for life.";
+
+const DEFAULT_DETAILS = {
+  churchTime: '11:00 am',
+  churchVenue: 'Redeemed Chapel, Ikeja, Lagos',
+  receptionTime: '3:00 pm',
+  receptionVenue: 'The Grand Hall, Victoria Island, Lagos',
+  asoEbi: 'emerald green and gold',
+  hashtag: '#DaraAndFemi2026',
+};
+
+// Local placeholder photos used until real ones are uploaded (hero + footer grid)
+const PLACEHOLDER_IMAGES = [
+  '/placeholder-1.svg',
+  '/placeholder-2.svg',
+  '/placeholder-3.svg',
+  '/placeholder-4.svg',
+  '/placeholder-5.svg',
+  '/placeholder-6.svg',
 ];
 
 const normalizeCode = (v: string) => v.trim().toUpperCase();
@@ -162,9 +227,77 @@ const blobToDataUrl = (blob: Blob): Promise<string> => {
 };
 
 // Helper for centralized file uploads (Direct signed Cloudinary upload + Server proxy + Fallback)
+// Same signed Cloudinary upload as uploadToCloudinary, but reports live
+// progress (0-100) through onProgress so the feed card can show a percentage.
+const uploadToCloudinaryWithProgress = async (file: Blob, folder: string, onProgress: (pct: number) => void): Promise<string> => {
+  const fileName = (file as File).name || (file.type?.startsWith('video/') ? 'upload.mp4' : 'upload.jpg');
+  const isVideo = Boolean(file.type && file.type.startsWith('video/')) || /\.(mp4|mov|webm|mkv)$/i.test(fileName);
+  const idToken = await auth?.currentUser?.getIdToken().catch(() => null);
+
+  const signatureEndpoints = [
+    `/api/upload-signature?folder=${encodeURIComponent(folder)}`,
+    `/.netlify/functions/upload-signature?folder=${encodeURIComponent(folder)}`
+  ];
+
+  for (const sigEndpoint of signatureEndpoints) {
+    try {
+      const sigRes = await fetch(sigEndpoint, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+          ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
+        }
+      });
+
+      if (sigRes.ok) {
+        const sigData = await sigRes.json().catch(() => null);
+        if (sigData && sigData.signature && sigData.cloudName && sigData.apiKey) {
+          const result = await new Promise<string>((resolve, reject) => {
+            const form = new FormData();
+            form.append('file', file, fileName);
+            form.append('api_key', sigData.apiKey);
+            form.append('timestamp', String(sigData.timestamp));
+            form.append('signature', sigData.signature);
+            form.append('folder', sigData.folder || folder);
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `https://api.cloudinary.com/v1_1/${sigData.cloudName}/${isVideo ? 'video' : 'auto'}/upload`);
+            xhr.upload.onprogress = (e) => {
+              if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+            };
+            xhr.onload = () => {
+              try {
+                const j = JSON.parse(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300 && j.secure_url) resolve(j.secure_url);
+                else reject(new Error('Cloudinary upload failed'));
+              } catch {
+                reject(new Error('Bad upload response'));
+              }
+            };
+            xhr.onerror = () => reject(new Error('Network error during upload'));
+            xhr.send(form);
+          });
+          onProgress(100);
+          return result;
+        }
+      }
+    } catch (directErr) {
+      console.warn(`Progress upload via ${sigEndpoint} failed:`, directErr);
+    }
+  }
+
+  // Fallback with no live progress.
+  onProgress(99);
+  return await uploadToCloudinary(file, folder);
+};
+
 const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> => {
   const fileName = (file as File).name || (file.type?.startsWith('video/') ? 'upload.mp4' : 'upload.jpg');
   const isVideo = Boolean(file.type && file.type.startsWith('video/')) || /\.(mp4|mov|webm|mkv)$/i.test(fileName);
+
+  // Attach the caller's Firebase ID token so the signature endpoint can verify them.
+  const idToken = await auth?.currentUser?.getIdToken().catch(() => null);
 
   console.log(`Starting upload to Cloudinary: ${file.size} bytes (${fileName}) to folder ${folder}`);
 
@@ -179,7 +312,10 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
       const sigRes = await fetch(sigEndpoint, {
         method: 'GET',
         credentials: 'include',
-        headers: { 'Accept': 'application/json' }
+        headers: {
+          'Accept': 'application/json',
+          ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
+        }
       });
 
       if (sigRes.ok) {
@@ -230,7 +366,8 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
     method: 'POST',
     credentials: 'include',
     headers: {
-      'Accept': 'application/json'
+      'Accept': 'application/json',
+      ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
     },
     body: formData
   });
@@ -239,7 +376,8 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
     res = await fetch('/.netlify/functions/upload', {
       method: 'POST',
       headers: {
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        ...(idToken ? { 'Authorization': `Bearer ${idToken}` } : {})
       },
       body: formData
     });
@@ -280,18 +418,47 @@ const uploadToCloudinary = async (file: Blob, folder: string): Promise<string> =
 };
 
 export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalProps) {
-  const [activeTab, setActiveTab] = useState('home');
-  const [feedSubTab, setFeedSubTab] = useState<'post' | 'reels'>('post');
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    try { return localStorage.getItem('ann-last-tab') || 'home'; } catch { return 'home'; }
+  });
+  const [feedSubTab, setFeedSubTab] = useState<'post' | 'reels'>(() => {
+    try { return (localStorage.getItem('ann-last-feedtab') as 'post' | 'reels') || 'post'; } catch { return 'post'; }
+  });
   const [videoOrientations, setVideoOrientations] = useState<Record<string, 'portrait' | 'landscape'>>({});
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [fontSize, setFontSize] = useState<'m' | 'l' | 'xl'>('m');
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [activeDay, setActiveDay] = useState(0);
+  const [footerImages, setFooterImages] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('ann-footer-images');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [footerLightbox, setFooterLightbox] = useState<string | null>(null);
+  const [avatarZoom, setAvatarZoom] = useState<string | null>(null);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [newPostText, setNewPostText] = useState('');
+  const [newPostEvent, setNewPostEvent] = useState<string>('');
   const [accessCode, setAccessCode] = useState('');
+  // The optimistic post shown in the feed while its media uploads, with the
+  // upload percentage rendered on the card itself.
+  const [uploadingPost, setUploadingPost] = useState<any | null>(null);
   const [attachedMedia, setAttachedMedia] = useState<{url: string, id: string, type?: 'image' | 'video', orientation?: 'portrait' | 'landscape'}[]>([]);
-  const [showProfilePrompt, setShowProfilePrompt] = useState(false);
+
+  // Email/password admin auth state
+  const [authScreen, setAuthScreen] = useState<null | 'signin' | 'forgot' | 'sent'>(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [mustSetPassword, setMustSetPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [setPasswordBusy, setSetPasswordBusy] = useState(false);
 
   
   // Firebase & Profile State
@@ -302,6 +469,29 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isAdminModalOpen, setIsAdminDashboardOpen] = useState(false);
+  const [route, setRoute] = useState<string>(() => window.location.pathname);
+  const goAdminPage = () => {
+    if (window.location.pathname !== '/admin') {
+      try { window.history.pushState({}, '', '/admin'); } catch {}
+    }
+    setRoute('/admin');
+    setIsAdminDashboardOpen(true);
+  };
+  const leaveAdminPage = () => {
+    setIsAdminDashboardOpen(false);
+    if (window.location.pathname !== '/') {
+      try { window.history.pushState({}, '', '/'); } catch {}
+    }
+    setRoute('/');
+  };
+  useEffect(() => {
+    const onPop = () => {
+      setRoute(window.location.pathname);
+      if (window.location.pathname !== '/admin') setIsAdminDashboardOpen(false);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [activeAccessCode, setActiveAccessCode] = useState<string | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
@@ -314,9 +504,25 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     setTimeout(() => setToast(null), 3000);
   };
 
+  const [cfgEvents, setCfgEvents] = useState<WeddingEvent[] | null>(null);
+  const [cfgStory, setCfgStory] = useState<string | null>(null);
+  const [cfgDetails, setCfgDetails] = useState<any>(null);
+  const [archiveMode, setArchiveMode] = useState<boolean>(false);
+  const [blockedUids, setBlockedUids] = useState<string[]>([]);
+  const [vendors, setVendors] = useState<any[]>([]);
+  const [residents, setResidents] = useState<any[]>([]);
+  const [approveGuestPosts, setApproveGuestPosts] = useState<boolean>(true);
+  const [pushEnabled, setPushEnabled] = useState<boolean>(true);
+  // Feed action button mode: 'share' opens the share sheet, 'download' saves the
+  // media straight to the guest's device. Chosen by the admin in the console
+  // Settings tab and stored on app_config/main as feedActionMode.
+  const [feedActionMode, setFeedActionMode] = useState<'share' | 'download'>('share');
   const [adminPermissions, setAdminPermissions] = useState<any>(null);
   const [deletedPosts, setDeletedPosts] = useState<any[]>([]);
   const [allAdmins, setAllAdmins] = useState<any[]>([]);
+  // Label attached to each hero photo (url -> event name), set in the console's
+  // Hero photos tab and stored on app_config/main.
+  const [heroImageLabels, setHeroImageLabels] = useState<Record<string, string>>({});
   const [heroImages, setHeroImages] = useState<string[]>(() => {
     try {
       const cached = localStorage.getItem('ann-hero-images');
@@ -329,8 +535,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }
     return [];
   });
-  const [dayImages, setDayImages] = useState<string[]>(new Array(7).fill(''));
-  const [estateWebsiteUrl, setEstateWebsiteUrl] = useState('https://ire-akari.estate');
   const [postAds, setPostAds] = useState<AdItem[]>([]);
   const [reelAds, setReelAds] = useState<AdItem[]>([]);
   const [shuffledPostAds, setShuffledPostAds] = useState<AdItem[]>([]);
@@ -354,10 +558,14 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
   const [userLoves, setUserLoves] = useState<Record<string, boolean>>({});
   const [reactionsLoading, setReactionsLoading] = useState(true);
   const [sharingPost, setSharingPost] = useState<any>(null);
+  const [commentsPost, setCommentsPost] = useState<any>(null);
+  const [sampleLiked, setSampleLiked] = useState<Record<string, boolean>>({});
   const [activeMediaIndex, setActiveMediaIndex] = useState<{postId: string, index: number} | null>(null);
 
   // PWA Install, Launch Follow-up Splash & Offline State
-  const [showLaunchSplash, setShowLaunchSplash] = useState(true);
+  const [showLaunchSplash, setShowLaunchSplash] = useState<boolean>(() => {
+    try { return !localStorage.getItem('ann-last-tab'); } catch { return true; }
+  });
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(() => (typeof window !== 'undefined' ? (window as any).__deferredPwaPrompt || null : null));
   const [isPWAInstalled, setIsPWAInstalled] = useState(false);
   const [isIOSDevice, setIsIOSDevice] = useState(false);
@@ -371,6 +579,45 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }, 5000);
     return () => clearTimeout(splashTimer);
   }, []);
+
+  // Keep the visitor where they were across refreshes
+  useEffect(() => {
+    try { localStorage.setItem('ann-last-tab', activeTab); } catch {}
+  }, [activeTab]);
+  useEffect(() => {
+    try { localStorage.setItem('ann-last-feedtab', feedSubTab); } catch {}
+  }, [feedSubTab]);
+
+  // Reopen the admin dashboard where it was left after a refresh
+  const adminUiFirstRunRef = useRef(true);
+  const adminAutoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (adminUiFirstRunRef.current) {
+      adminUiFirstRunRef.current = false;
+      return;
+    }
+    try {
+      const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null') || {};
+      localStorage.setItem('ann-admin-ui', JSON.stringify({ ...storedAdminUi, open: isAdminModalOpen }));
+    } catch {}
+  }, [isAdminModalOpen]);
+  useEffect(() => {
+    if (route === '/admin' && user && !user.isAnonymous && isAdmin) setIsAdminDashboardOpen(true);
+  }, [route, user, isAdmin]);
+
+  useEffect(() => {
+    if (!user || !isAdmin) return;
+    try {
+      const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null');
+      if (storedAdminUi && storedAdminUi.open) {
+        setIsAdminDashboardOpen(true);
+        if (window.location.pathname !== '/admin') {
+          try { window.history.replaceState({}, '', '/admin'); } catch {}
+          setRoute('/admin');
+        }
+      }
+    } catch {}
+  }, [user, isAdmin]);
 
   useEffect(() => {
     const isStandalone =
@@ -540,6 +787,10 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       if (timeLeft <= 0) {
         signOut(auth);
         setIsAdminDashboardOpen(false);
+        if (window.location.pathname !== '/') {
+          try { window.history.pushState({}, '', '/'); } catch {}
+          setRoute('/');
+        }
         setIsAdminSessionValid(false);
         showToast("Your admin session expired. Please sign in again.", "error");
       } else if (timeLeft < 120000 && !sessionWarningRef.current) {
@@ -571,9 +822,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         const data = snap.data();
         if (data.displayName) setDisplayName(data.displayName);
         if (data.photoUrl) setAvatar(data.photoUrl);
-        setShowProfilePrompt(!data.displayName || !data.photoUrl);
       } else {
-        setShowProfilePrompt(true);
       }
     }, (err) => {
       handleFirestoreError(err, OperationType.GET, `residents/${user.uid}`);
@@ -584,16 +833,21 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       if (snap.exists()) {
         setIsAdmin(true);
         setAdminPermissions(snap.data().permissions);
+        setMustSetPassword(!!snap.data().mustSetPassword);
+        if (!adminAutoOpenedRef.current) { adminAutoOpenedRef.current = true; goAdminPage(); }
       } else if (isSuper) {
+        setMustSetPassword(false);
         setIsAdmin(true);
         setAdminPermissions({ 
           canDeletePosts: true, 
           canUploadImages: true, 
           canSetAccessCode: true 
         });
+        if (!adminAutoOpenedRef.current) { adminAutoOpenedRef.current = true; goAdminPage(); }
       } else {
         setIsAdmin(false);
         setAdminPermissions(null);
+        adminAutoOpenedRef.current = false;
       }
     }, (err) => {
       handleFirestoreError(err, OperationType.GET, `admins/${user.email}`);
@@ -603,20 +857,6 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       profileUnsub();
       adminUnsub();
     };
-  }, [user]);
-
-  // Sync user reactions for the Jubilee Documentary
-  useEffect(() => {
-    if (!user) return;
-    const reactionRef = doc(db, 'posts', 'jubilee_documentary', 'reactions', user.uid);
-    const unsub = onSnapshot(reactionRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setUserLikes(prev => ({ ...prev, jubilee_documentary: !!data.like }));
-        setUserLoves(prev => ({ ...prev, jubilee_documentary: !!data.love }));
-      }
-    });
-    return () => unsub();
   }, [user]);
 
   // Handle Reactions Logic
@@ -694,12 +934,24 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
             // Ignore storage quota error
           }
         }
-        if (data.dayImages && data.dayImages.length > 0) {
-          setDayImages(data.dayImages);
+        if (Array.isArray(data.footerImages)) {
+          setFooterImages(data.footerImages);
+          try {
+            localStorage.setItem('ann-footer-images', JSON.stringify(data.footerImages));
+          } catch {
+            // Ignore storage quota error
+          }
         }
-        if (data.estateWebsiteUrl) {
-          setEstateWebsiteUrl(data.estateWebsiteUrl);
-        }
+        if (data.heroImageLabels && typeof data.heroImageLabels === 'object') setHeroImageLabels(data.heroImageLabels);
+        if (Array.isArray(data.events) && data.events.length) setCfgEvents(data.events);
+        if (typeof data.story === 'string' && data.story.trim()) setCfgStory(data.story);
+        if (data.weddingDetails && typeof data.weddingDetails === 'object') setCfgDetails(data.weddingDetails);
+        if (typeof data.archiveMode === 'boolean') setArchiveMode(data.archiveMode);
+        if (Array.isArray(data.blockedUids)) setBlockedUids(data.blockedUids);
+        if (Array.isArray(data.vendors)) setVendors(data.vendors);
+        if (typeof data.approveGuestPosts === 'boolean') setApproveGuestPosts(data.approveGuestPosts);
+        if (data.feedActionMode === 'download' || data.feedActionMode === 'share') setFeedActionMode(data.feedActionMode);
+        if (typeof data.pushEnabled === 'boolean') setPushEnabled(data.pushEnabled);
         if (Array.isArray(data.postAds)) {
           setPostAds(data.postAds);
           const copy = [...data.postAds];
@@ -728,6 +980,19 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     return () => unsub();
   }, []);
 
+  // 2c. Residents (guest profiles + vendor requests). Public read per rules.
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'residents'), (snap) => {
+      const arr: any[] = [];
+      snap.forEach((d) => arr.push({ uid: d.id, ...d.data() }));
+      setResidents(arr);
+    }, (err) => {
+      console.error('Residents sync error:', err);
+      setResidents([]);
+    });
+    return () => unsub();
+  }, []);
+
   // 2b. Initialize Config (Admin only)
   useEffect(() => {
     if (!isAdmin || !isAdminSessionValid) return;
@@ -736,28 +1001,21 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
       try {
         const snap = await getDoc(doc(db, 'app_config', 'main'));
         if (!snap.exists()) {
-          await setDoc(doc(db, 'app_config', 'main'), { 
-            activeAccessCode: 'IRE2026',
-            estateWebsiteUrl: 'https://ire-akari.estate',
-            createdAt: serverTimestamp()
+          await setDoc(doc(db, 'app_config', 'main'), {
+            activeAccessCode: 'DARAFEMI26',
+            createdAt: serverTimestamp(),
+            events: EVENTS_DATA.map((e) => ({ ...e, status: seedEventStatuses()[e.id] })),
+            story: DEFAULT_STORY,
+            weddingDetails: DEFAULT_DETAILS
           });
+        } else if (!Array.isArray(snap.data().events)) {
+          await setDoc(doc(db, 'app_config', 'main'), {
+            events: EVENTS_DATA.map((e) => ({ ...e, status: seedEventStatuses()[e.id] })),
+            story: snap.data().story || DEFAULT_STORY,
+            weddingDetails: snap.data().weddingDetails || DEFAULT_DETAILS
+          }, { merge: true });
         }
 
-        // Initialize Jubilee Documentary stats
-        const docRef = doc(db, 'posts', 'jubilee_documentary');
-        const docSnap = await getDoc(docRef);
-        if (!docSnap.exists()) {
-          await setDoc(docRef, {
-            id: 'jubilee_documentary',
-            authorName: 'Committee',
-            text: 'Ire-Akari at 30: A Documentary',
-            mediaUrls: ['https://res.cloudinary.com/qgvszym1/video/upload/v1784929959/Untitled_video_3_1_cafnet.mp4'],
-            likeCount: 0,
-            loveCount: 0,
-            timestamp: serverTimestamp(),
-            isFeatured: true
-          });
-        }
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, 'app_config/main');
         console.error("Config initialization error:", err);
@@ -805,18 +1063,94 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }
   }, [isAdmin, isAdminSessionValid, user]);
 
-  // Handle Admin Login
-  const handleAdminLogin = async () => {
-    const provider = new GoogleAuthProvider();
+  // Handle Admin Login (email & password)
+  const handleAdminLogin = async (email: string, password: string) => {
+    setAuthError('');
+    setAuthBusy(true);
     try {
-      await signInWithPopup(auth, provider);
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      setAuthScreen(null);
+      setAuthPassword('');
+      setAuthEmail('');
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code.includes('wrong-password') || code.includes('user-not-found') || code.includes('invalid-credential')) {
+        setAuthError('Email or password is incorrect.');
+      } else if (code.includes('too-many-requests')) {
+        setAuthError('Too many attempts. Try again in a moment.');
+      } else {
+        setAuthError('Could not sign in. Please try again.');
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleAdminSignup = async (email: string, password: string) => {
+    setAuthError('');
+    setAuthBusy(true);
+    try {
+      await createUserWithEmailAndPassword(auth, email.trim(), password);
+      setAuthScreen(null);
+      setAuthPassword('');
+      setAuthEmail('');
+      showToast('Admin account created.', 'success');
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code.includes('email-already-in-use')) {
+        setAuthError('That email already has an account. Sign in instead.');
+      } else if (code.includes('weak-password')) {
+        setAuthError('Password is too weak. Use at least 6 characters.');
+      } else {
+        setAuthError('Could not create the account. Please try again.');
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleForgotPassword = async (email: string) => {
+    setAuthError('');
+    setAuthBusy(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      setAuthScreen('sent');
+    } catch (err: any) {
+      const code = err?.code || '';
+      setAuthError(code.includes('user-not-found') ? 'No account found for that email.' : 'Could not send the reset email. Please try again.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSetPermanentPassword = async () => {
+    if (newPassword.length < 6) { setAuthError('Use at least 6 characters.'); return; }
+    if (newPassword !== confirmNewPassword) { setAuthError('The two passwords do not match.'); return; }
+    setAuthError('');
+    setSetPasswordBusy(true);
+    try {
+      if (user) await updatePassword(user, newPassword);
+      if (user?.email) await setDoc(doc(db, 'admins', user.email), { mustSetPassword: false }, { merge: true });
+      setMustSetPassword(false);
+      setNewPassword('');
+      setConfirmNewPassword('');
+      showToast('Permanent password saved. Welcome in!', 'success');
     } catch (err) {
-      console.error("Login error:", err);
-      showToast("Login failed. Use justfashion414@gmail.com", "error");
+      console.error('Set password error:', err);
+      setAuthError('Could not update the password. Sign out, sign in again, then try.');
+    } finally {
+      setSetPasswordBusy(false);
     }
   };
 
   const handleLogout = () => signOut(auth);
+
+  // Derived wedding content: Firestore values when the couple has saved them,
+  // seeded defaults before their first save.
+  const EVENTS: WeddingEvent[] = cfgEvents && cfgEvents.length ? cfgEvents : EVENTS_DATA;
+  const STORY: string = cfgStory && cfgStory.trim() ? cfgStory : DEFAULT_STORY;
+  const DETAILS: any = cfgDetails || DEFAULT_DETAILS;
+  const vendorRequests = residents.filter((r: any) => r?.vendorRequest && r.vendorRequest.status === 'pending');
 
   const updateAccessCode = async (newCode: string) => {
     if (!isAdmin || !adminPermissions?.canSetAccessCode) return;
@@ -837,74 +1171,272 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     }
   };
 
+  const updateWedding = async (events: WeddingEvent[], story: string, details: any) => {
+    if (!isAdmin || !isAdminSessionValid) return;
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), {
+        events,
+        story,
+        weddingDetails: details,
+        lastUpdated: serverTimestamp()
+      }, { merge: true });
+      setCfgEvents(events);
+      setCfgStory(story);
+      setCfgDetails(details);
+      showToast('Saved. Guests see this on the Home screen.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      console.error('Update wedding details error:', err);
+      showToast('Failed to save changes.', 'error');
+    }
+  };
+
+  const updatePeople = async (patch: { vendors?: string[]; blockedUids?: string[] }) => {
+    if (!isAdmin || !adminPermissions?.canSetAccessCode) { showToast('You do not have permission for that.', 'error'); return; }
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), { ...patch, lastUpdated: serverTimestamp() }, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Failed to update.', 'error');
+    }
+  };
+
+  const handleVendorRequest = async (uid: string, name: string, approve: boolean) => {
+    if (!isAdmin || !adminPermissions?.canSetAccessCode) { showToast('You do not have permission for that.', 'error'); return; }
+    try {
+      const next = approve ? Array.from(new Set([...(vendors || []), uid])) : (vendors || []).filter((u: any) => u !== uid);
+      await setDoc(doc(db, 'app_config', 'main'), { vendors: next, lastUpdated: serverTimestamp() }, { merge: true });
+      try {
+        await updateDoc(doc(db, 'residents', uid), { vendorRequest: { status: approve ? 'approved' : 'declined', decidedAt: serverTimestamp() } });
+      } catch (err: any) {
+        console.error('Vendor request status update needs superadmin:', err?.message || err);
+      }
+      showToast(approve ? `${name} is now an official vendor.` : 'Request declined.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Could not update the vendor request.', 'error');
+    }
+  };
+
+  const updateAppConfigFlags = async (patch: Record<string, any>, okMsg = 'Setting saved.') => {
+    if (!isAdmin || !adminPermissions?.canSetAccessCode) { showToast('You do not have permission for that.', 'error'); return; }
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), { ...patch, lastUpdated: serverTimestamp() }, { merge: true });
+      showToast(okMsg);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Failed to save the setting.', 'error');
+    }
+  };
+
+  // Saves the label attached to each hero photo (url -> event name).
+  const updateHeroLabels = async (map: Record<string, string>) => {
+    setHeroImageLabels(map);
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), { heroImageLabels: map, lastUpdated: serverTimestamp() }, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Could not save the label.', 'error');
+    }
+  };
+
+  // Saves one section of the wedding details (story, details or events) on its
+  // own, used by the per-section Save buttons in the console's Events & details tab.
+  const updateWeddingSection = async (patch: Record<string, any>) => {
+    if (!isAdmin || !isAdminSessionValid) return;
+    try {
+      await setDoc(doc(db, 'app_config', 'main'), { ...patch, lastUpdated: serverTimestamp() }, { merge: true });
+      if ('events' in patch) setCfgEvents(patch.events);
+      if ('story' in patch) setCfgStory(patch.story);
+      if ('weddingDetails' in patch) setCfgDetails(patch.weddingDetails);
+      showToast('Saved. Guests see this on the Home screen.');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'app_config/main');
+      showToast('Could not save. Please try again.', 'error');
+    }
+  };
+
+  const approvePost = async (postId: string) => {
+    try {
+      await updateDoc(doc(db, 'posts', postId), { pending: false });
+      showToast('Approved. Guests can now see it', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Could not approve the post.', 'error');
+    }
+  };
+
+  /**
+   * Shares a post through the device's native share sheet where one exists,
+   * falling back to the in-app ShareSheet (WhatsApp / copy link / X).
+   */
+  const sharePost = async (p: any) => {
+    const url = `${window.location.origin}${window.location.pathname}?post=${p.id}`;
+    const title = p.text || p.caption || 'A memory from Dara & Femi';
+    if (typeof navigator !== 'undefined' && (navigator as any).share) {
+      try { await (navigator as any).share({ title: 'Dara & Femi', text: title, url }); return; } catch { return; }
+    }
+    setSharingPost(p);
+  };
+
+  /**
+   * Downloads a post's or reel's media files straight to the guest's device,
+   * one file at a time. This backs the "Download" mode of the feed action
+   * button, which the admin turns on in the console Settings tab
+   * (app_config/main.feedActionMode). Cloudinary files are served with open
+   * CORS headers, so a plain fetch works for both images and videos; a short
+   * pause between files keeps mobile browsers from blocking the batch.
+   */
+  const downloadMediaFiles = async (urls: string[], types: any[] | undefined, baseName = 'dara-femi-memory') => {
+    const list = Array.isArray(urls) ? urls.filter(Boolean) : [];
+    if (!list.length) { showToast('There is no photo or video on this post to download.', 'error'); return; }
+    showToast(list.length > 1 ? 'Downloading files…' : 'Downloading…');
+    let ok = 0;
+    for (let i = 0; i < list.length; i++) {
+      try {
+        const res = await fetch(list[i]);
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const u = list[i];
+        const isVideo = types?.[i] === 'video' || u.toLowerCase().includes('.mp4') || u.toLowerCase().includes('.webm') || u.toLowerCase().includes('.mov') || u.includes('/video/');
+        const ext = isVideo ? 'mp4' : (u.split('?')[0].split('.').pop() || 'jpg').slice(0, 5);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${baseName}${list.length > 1 ? `-${i + 1}` : ''}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+        ok += 1;
+        if (list.length > 1) await new Promise((r) => setTimeout(r, 400));
+      } catch (err) {
+        console.error('Media download failed:', err);
+      }
+    }
+    showToast(ok ? `Saved ${ok} ${ok === 1 ? 'file' : 'files'} to your device.` : 'Could not download the files. Please try again.', ok ? 'success' : 'error');
+  };
+
+
+  const deleteAllGuestData = async () => {
+    if (!isAdmin || adminPermissions?.canDeletePosts === false) { showToast('You do not have permission to delete posts.', 'error'); return; }
+    try {
+      const snap = await getDocs(collection(db, 'posts'));
+      let n = 0;
+      for (const d of snap.docs) {
+        await deleteDoc(doc(db, 'posts', d.id));
+        n += 1;
+      }
+      showToast(`Deleted ${n} ${n === 1 ? 'post' : 'posts'}.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'posts');
+      showToast('Could not delete everything.', 'error');
+    }
+  };
+
+  const downloadEverything = async () => {
+    if (!posts.length) { showToast('Nothing to download yet.'); return; }
+    try {
+      showToast('Preparing your zip…');
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      let n = 0;
+      for (const p of posts) {
+        const evName = (EVENTS.find((e) => e.id === p.eventId)?.name || 'Other memories').replace(/[^\w -]/g, '').trim() || 'Other memories';
+        const folder = zip.folder(evName) || zip;
+        const urls: string[] = Array.isArray(p.mediaUrls) ? p.mediaUrls : (p.mediaUrl ? [p.mediaUrl] : []);
+        for (const u of urls) {
+          try {
+            const res = await fetch(u);
+            if (!res.ok) continue;
+            const blob = await res.blob();
+            const ext = (u.split('?')[0].split('.').pop() || 'jpg').slice(0, 5);
+            folder.file(`${(p.authorName || 'guest').replace(/[^\w -]/g, '') || 'guest'}-${p.id}-${n}.${ext}`, blob);
+            n += 1;
+          } catch { /* skip a file that will not fetch */ }
+        }
+        if (!urls.length && (p.text || p.caption)) folder.file(`${p.id}.txt`, String(p.text || p.caption));
+      }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'dara-femi-memories.zip';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      showToast(`Downloaded ${n} ${n === 1 ? 'file' : 'files'}.`);
+    } catch (err) {
+      console.error('Download everything failed:', err);
+      showToast('Could not build the zip. Try again on a desktop browser.', 'error');
+    }
+  };
+
+  const createMemoryBook = () => {
+    const win = window.open('', '_blank');
+    if (!win) { showToast('Allow pop-ups to create the memory book.', 'error'); return; }
+    const esc = (s: any) => String(s || '').replace(/[&<>"]/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+    const cards = posts.slice(0, 200).map((p: any) => {
+      const evName = EVENTS.find((e) => e.id === p.eventId)?.name || '';
+      const img = p.mediaUrls && p.mediaUrls[0] ? `<img src="${esc(p.mediaUrls[0])}" alt="" />` : '';
+      const txt = p.text || p.caption || '';
+      return `<section class="card"><header><b>${esc(p.authorName || 'A guest')}</b><span>${esc(evName)}</span></header>${img}<p>${esc(txt)}</p></section>`;
+    }).join('');
+    win.document.write(`<!doctype html><html><head><title>Dara &amp; Femi memory book</title><style>body{font-family:Georgia,serif;max-width:720px;margin:0 auto;padding:32px;color:#14262D}h1{font-size:34px;margin:0}p.sub{color:#5A6970;font-family:Arial,sans-serif;margin:6px 0 28px}.card{border:1px solid #DAD8E3;border-radius:14px;padding:16px;margin-bottom:18px;page-break-inside:avoid}.card header{display:flex;justify-content:space-between;font-family:Arial,sans-serif;margin-bottom:8px}.card header span{color:#0E6B75;font-size:12px;text-transform:uppercase;letter-spacing:1px}.card img{width:100%;border-radius:10px;margin-bottom:8px}.card p{margin:0;line-height:1.5}</style></head><body><h1>Dara &amp; Femi</h1><p class="sub">Wedding memories &middot; ${esc(DETAILS.hashtag)}</p>${cards}</body></html>`);
+    win.document.close();
+  };
+
+  // Post lifecycle (delete / restore / erase) runs through the server admin
+  // endpoint, which verifies the caller's admins doc, then moves or removes
+  // the Firestore docs and purges the post's Cloudinary files.
+  const adminPostAction = async (action: 'delete' | 'restore' | 'erase', postId: string) => {
+    if (!user) throw new Error('Sign in required.');
+    const idToken = await user.getIdToken();
+    const res = await fetch('/api/admin-post-action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ action, postId })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Action failed.');
+    return data;
+  };
+
   // Delete Post (Move to Recycle Bin)
   const handleDeletePost = async (postId: string) => {
-    if (!isAdmin || !adminPermissions?.canDeletePosts) {
+    if (!isAdmin) {
       showToast("Permission denied for deletion.", "error");
       return;
     }
-    
     try {
-      const postRef = doc(db, 'posts', postId);
-      const postSnap = await getDoc(postRef);
-      
-      if (postSnap.exists()) {
-        const postData = postSnap.data();
-        
-        // 1. Move to deleted_posts
-        await setDoc(doc(db, 'deleted_posts', postId), {
-          originalId: postId,
-          postData: postData,
-          deletedAt: serverTimestamp(),
-          deletedBy: user.email
-        });
-        
-        // 2. Delete from main feed
-        await deleteDoc(postRef);
-        
-        showToast('Post moved to recycle bin');
-      }
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `posts/${postId}`);
+      const data = await adminPostAction('delete', postId);
+      const purged = data?.media?.purged || 0;
+      showToast(purged > 0 ? `Post moved to recycle bin (${purged} file${purged === 1 ? '' : 's'} removed from Cloudinary)` : 'Post moved to recycle bin');
+    } catch (err: any) {
       console.error("Delete error:", err);
-      showToast("Failed to move post to bin.", "error");
+      showToast(err?.message || "Failed to move post to bin.", "error");
     }
   };
 
   // Restore Post
   const handleRestorePost = async (postId: string) => {
-    if (!isAdmin || !adminPermissions?.canDeletePosts) return;
-
+    if (!isAdmin) return;
     try {
-      const delRef = doc(db, 'deleted_posts', postId);
-      const delSnap = await getDoc(delRef);
-
-      if (delSnap.exists()) {
-        const { postData } = delSnap.data();
-        
-        // 1. Move back to posts
-        await setDoc(doc(db, 'posts', postId), postData);
-        
-        // 2. Remove from bin
-        await deleteDoc(delRef);
-
-        showToast('Post restored to feed');
-      }
-    } catch (err) {
+      await adminPostAction('restore', postId);
+      showToast('Post restored to feed');
+    } catch (err: any) {
       console.error("Restore error:", err);
-      showToast("Failed to restore post.", "error");
+      showToast(err?.message || "Failed to restore post.", "error");
     }
   };
 
   // Permanent Delete
   const handlePermanentDelete = async (postId: string) => {
-    if (!isAdmin || !adminPermissions?.canDeletePosts) return;
+    if (!isAdmin) return;
     try {
-      await deleteDoc(doc(db, 'deleted_posts', postId));
-      showToast('Post permanently erased');
-    } catch (err) {
+      const data = await adminPostAction('erase', postId);
+      const purged = data?.media?.purged || 0;
+      showToast(purged > 0 ? `Post permanently erased (${purged} file${purged === 1 ? '' : 's'} removed from Cloudinary)` : 'Post permanently erased');
+    } catch (err: any) {
       console.error("Erase error:", err);
-      showToast("Failed to erase post.", "error");
+      showToast(err?.message || "Failed to erase post.", "error");
     }
   };
 
@@ -921,6 +1453,24 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
     });
     return () => unsub();
   }, []);
+
+  // Footer grid: newest posted images replace the placeholder cells first,
+  // then admin-set images, then the placeholders.
+  const postFeedImages = useMemo(() => {
+    const imgs: string[] = [];
+    for (const p of posts as any[]) {
+      if (p.pending) continue;
+      const urls: string[] = Array.isArray(p.mediaUrls) ? p.mediaUrls : (p.mediaUrl ? [p.mediaUrl] : []);
+      urls.forEach((u: string, i: number) => {
+        if (typeof u === 'string' && u.startsWith('http') && (p.mediaTypes?.[i] || 'image') !== 'video' && !imgs.includes(u)) imgs.push(u);
+      });
+    }
+    return imgs;
+  }, [posts]);
+  const footerPool = useMemo(
+    () => [...postFeedImages, ...(footerImages || []), ...PLACEHOLDER_IMAGES],
+    [postFeedImages, footerImages]
+  );
 
   // 3b. Detect video orientation for existing posts without explicit orientation metadata
   useEffect(() => {
@@ -1048,14 +1598,15 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
 
   const getDayPhase = () => {
     const now = new Date();
-    const start = new Date('2026-11-30T00:00:00');
-    const end = new Date('2026-12-07T00:00:00');
+    const start = new Date(`${WEDDING_DATE}T${WEDDING_TIME}:00`);
+    const end = new Date('2026-12-14T00:00:00');
     if (now < start) return 'before';
     if (now > end) return 'after';
     return 'during';
   };
 
   const phase = getDayPhase();
+  const daysToGo = Math.max(0, Math.ceil((new Date(`${WEDDING_DATE}T${WEDDING_TIME}:00`).getTime() - Date.now()) / 86400000));
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? 'bg-[#0B171C] text-[#E8EEF0]' : 'bg-[#EEEDF3] text-[#14262D]'} font-sans pb-32`}>
@@ -1068,40 +1619,31 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
             exit={{ opacity: 0, scale: 1.04, filter: 'blur(8px)' }}
             transition={{ duration: 0.65, ease: [0.22, 1, 0.36, 1] }}
             onClick={() => setShowLaunchSplash(false)}
-            className="fixed inset-0 z-[500] overflow-hidden flex items-center justify-center bg-[#EEEDF3] dark:bg-[#0B171C] cursor-pointer select-none"
+            className="fixed inset-0 z-[500] overflow-hidden flex items-center justify-center bg-[#0B3A41] cursor-pointer select-none"
           >
-            {/* THE GIANT NAME: IRE AKARI ESTATE · SOKA, IBADAN (PLAIN TEXT ONLY) */}
-            <div className="relative z-10 flex flex-col items-center max-w-full px-4 text-center pointer-events-none">
+            {/* SPLASH: DARA & FEMI */}
+            <div className="relative z-10 flex flex-col items-center max-w-full px-6 text-center pointer-events-none">
               <motion.div
-                initial={{ scale: 0.88, opacity: 0, y: 18 }}
+                initial={{ scale: 0.94, opacity: 0, y: 14 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 transition={{ duration: 0.75, ease: "circOut" }}
               >
-                <h1 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase mb-0 text-[#0E6B75] drop-shadow-sm">
-                  I&nbsp;RE AKARI
+                <p className="text-[0.95rem] font-medium tracking-wide text-[#BCD4D8] m-0 mb-4">Together with their families</p>
+                <h1 className="font-serif-display text-white text-[clamp(3.4rem,17vw,5.6rem)] leading-[0.95] m-0">
+                  Dara
+                  <span className="block italic text-[clamp(1.5rem,7.5vw,2.1rem)] text-[#C8932A] my-3">and</span>
+                  Femi
                 </h1>
-                <h2 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase flex items-center justify-center gap-[0.05em] text-[#0E6B75] drop-shadow-sm">
-                  <span>ESTATE</span>
-                  <motion.div
-                    animate={{ scale: [1, 1.2, 1], rotate: [0, 12, 0] }}
-                    transition={{ repeat: Infinity, duration: 4 }}
-                    className="w-[0.3em] h-[0.3em] rounded-full bg-[#0E6B75] opacity-80"
-                  />
-                </h2>
+                <p className="text-[#BCD4D8] text-[1rem] mt-6 mb-0">Wedding memories, kept for life.</p>
               </motion.div>
-
-              <motion.div
-                initial={{ opacity: 0, width: 0 }}
-                animate={{ opacity: 1, width: '100%' }}
-                transition={{ delay: 0.3, duration: 0.9 }}
-                className="flex items-center gap-4 mt-10 sm:mt-12 w-full max-w-md mx-auto"
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.75 }}
+                transition={{ delay: 0.9, duration: 0.8 }}
+                className="mt-10 text-[0.8rem] text-white"
               >
-                <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
-                <p className="text-[clamp(0.8rem,3vw,1.5rem)] font-display font-black tracking-[0.4em] uppercase whitespace-nowrap opacity-60 text-[#0E6B75]">
-                  Soka, Ibadan
-                </p>
-                <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
-              </motion.div>
+                Tap to enter
+              </motion.p>
             </div>
           </motion.section>
         )}
@@ -1112,7 +1654,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         <header className={`sticky top-0 z-[60] backdrop-blur-md px-5 py-3.5 border-b transition-colors ${isDarkMode ? 'bg-[#0B171C]/80 border-[#22363E]' : 'bg-[#EEEDF3]/80 border-[#DAD8E3]'}`}>
           <div className="max-w-[520px] mx-auto flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <h1 className="text-[1.15rem] font-black font-display tracking-[-0.01em] leading-none text-[#0E6B75]">Ire-Akari</h1>
+              <h1 className="text-[1.25rem] font-serif-display italic font-medium tracking-[0] leading-none text-[#0E6B75]">Dara &amp; Femi</h1>
               {!isOnline && (
                 <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-500 text-[10px] font-black uppercase tracking-wider">
                   Offline
@@ -1138,6 +1680,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         </header>
       )}
 
+      {route !== '/admin' && (
       <main className="max-w-[520px] mx-auto px-4 pt-1.5">
         {/* PERSISTENT HERO SECTION - Kept laid out in the background even when on other tabs so offsetHeight is never 0 and pairs continue scrolling seamlessly */}
         <div
@@ -1148,7 +1691,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           }
           aria-hidden={activeTab !== 'home'}
         >
-           <FloatingHeroSection isDarkMode={isDarkMode} images={heroImages} />
+           <FloatingHeroSection isDarkMode={isDarkMode} images={heroImages} eventNames={EVENTS.map((e) => e.name)} />
         </div>
 
         {/* TOAST NOTIFICATION */}
@@ -1196,59 +1739,59 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               exit={{ opacity: 0 }}
               className="space-y-0"
             >
-              {/* HERO - EXACT REPLICATION */}
-              <div className="rounded-[28px] p-[26px_22px_22px] text-[#F2F7F8] bg-[#0B3A43] relative overflow-hidden shadow-xl" style={{
-                background: 'radial-gradient(120% 90% at 88% 0%, #1F7380 0%, transparent 55%), radial-gradient(90% 80% at 0% 100%, #3A2F63 0%, transparent 62%), #0B3A43'
+              {/* COUPLE BANNER - DARA & FEMI */}
+              <div className="rounded-[28px] p-[26px_22px_26px] text-[#F2F7F8] relative overflow-hidden shadow-xl" style={{
+                background: 'linear-gradient(135deg, #0B3A41 0%, #3A2F63 100%)'
               }}>
-                <div className="flex items-end gap-[14px]">
-                  <p className="text-[clamp(6.5rem,34vw,9.5rem)] font-black font-display leading-[0.78] tracking-[-0.05em] m-0 animate-sheen text-transparent bg-clip-text" aria-label="30">30</p>
-                  <div className="pb-1">
-                    <strong className="block text-[1.3rem] font-display leading-[1.15]">years of<br/>Ire-Akari</strong>
-                    <span className="block text-[0.85rem] opacity-[0.82] mt-1">Pearl anniversary week</span>
-                  </div>
-                </div>
+                <p className="m-0 text-center text-[0.92rem] font-medium text-[#C8932A]">Together with their families</p>
+                <h2 className="text-center font-serif-display text-white text-[clamp(2.7rem,13vw,3.6rem)] leading-[1] mt-3 mb-0">
+                  Dara
+                  <span className="block italic text-[clamp(1.3rem,6vw,1.6rem)] text-[#C8932A] my-2">and</span>
+                  Femi
+                </h2>
+                <p className="text-center text-[0.95rem] opacity-[0.85] mt-4 mb-0 max-w-[34ch] mx-auto leading-snug">are getting married. Share every moment with us, from the first introduction to the last dance.</p>
 
-                {showProfilePrompt && !isAdmin && (
-                  <div className="mt-5 bg-white/10 border border-white/20 rounded-[20px] p-4 flex items-center justify-between gap-4 backdrop-blur-md">
-                    <div className="flex-1">
-                      <b className="text-[0.95rem] font-display block mb-0.5">Complete your profile</b>
-                      <p className="text-[0.8rem] opacity-80 m-0 leading-tight">Add your name and photo to join the community wall.</p>
+                {phase === 'before' && (
+                  <div className="mt-5 mx-auto flex items-stretch justify-center bg-white/10 border border-white/25 rounded-[18px] py-3.5 backdrop-blur-md divide-x divide-white/25">
+                    <div className="px-5 text-center">
+                      <b className="block text-[1.5rem] font-serif-display leading-none">{daysToGo}</b>
+                      <span className="block text-[0.68rem] uppercase tracking-wider opacity-75 mt-1.5">days to go</span>
                     </div>
-                    <button 
-                      onClick={() => setActiveTab('settings')}
-                      className="whitespace-nowrap px-4 py-2 bg-white text-[#0B3A43] rounded-full text-[0.75rem] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-all"
-                    >
-                      Set Up
-                    </button>
+                    <div className="px-5 text-center">
+                      <b className="block text-[1.5rem] font-serif-display leading-none">12 Dec</b>
+                      <span className="block text-[0.68rem] uppercase tracking-wider opacity-75 mt-1.5">2026</span>
+                    </div>
+                    <div className="px-5 text-center">
+                      <b className="block text-[1.5rem] font-serif-display leading-none">Lagos</b>
+                      <span className="block text-[0.68rem] uppercase tracking-wider opacity-75 mt-1.5">Nigeria</span>
+                    </div>
                   </div>
                 )}
-                
-                {phase === 'before' && <CountdownTimer targetDate={new Date('2026-11-30T00:00:00')} isDarkMode={isDarkMode} />}
 
                 {phase === 'during' && (
                   <div className="mt-5 bg-white/10 border border-white/14 rounded-[18px] p-[14px_16px]">
                     <div className="flex items-center gap-2 mb-0.5">
                       <div className="w-2 h-2 rounded-full bg-[#7CF2B0]" />
-                      <b className="text-[1.05rem] font-display">Day 1 of 7, happening now</b>
+                      <b className="text-[1.05rem] font-serif-display">It&apos;s the wedding day</b>
                     </div>
-                    <p className="text-[0.9rem] opacity-[0.9] m-0">Next: Opening ceremony at 5:00pm, Clubhouse lawn</p>
+                    <p className="text-[0.9rem] opacity-[0.9] m-0">Share what you are seeing. We are keeping it all.</p>
                   </div>
                 )}
 
                 {phase === 'after' && (
                   <div className="mt-5 bg-white/10 border border-white/14 rounded-[18px] p-[14px_16px]">
-                    <b className="text-[1.05rem] font-display">Thank you for 30 wonderful years</b>
-                    <p className="text-[0.9rem] opacity-[0.9] m-0">The week is over, but the memories are still coming in.</p>
+                    <b className="text-[1.05rem] font-serif-display">The memories are here to stay</b>
+                    <p className="text-[0.9rem] opacity-[0.9] m-0">Every moment from the weekend, kept for life.</p>
                   </div>
                 )}
 
-                <button 
+                <button
                   onClick={() => setActiveTab('feed')}
-                  className="mt-4 inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_18px] font-bold bg-white text-[#0B3A43] text-sm hover:scale-105 transition-all group"
+                  className="mt-5 inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_18px] font-bold bg-white text-[#0B3A41] text-sm hover:scale-105 transition-all"
                 >
-                  See what neighbours are posting
-                  <motion.span 
-                    animate={{ x: [0, 5, 0] }} 
+                  See what guests are posting
+                  <motion.span
+                    animate={{ x: [0, 5, 0] }}
                     transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
                     className="flex items-center"
                   >
@@ -1257,151 +1800,126 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </button>
               </div>
 
-              {/* VIDEO & THREE DECADES LEGACY SECTION */}
-              <div className="mt-8 mb-4">
-                <div className="text-center max-w-3xl mx-auto mb-8 px-4">
-                  <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-[#0E6B75]/10 border border-[#0E6B75]/30 rounded-full text-[#0E6B75] mb-4">
-                    <PartyPopper className="w-4 h-4" />
-                    <span className="text-[10px] font-black uppercase tracking-[0.2em]">30th Anniversary Jubilee</span>
+              {!isAdmin && !(displayName.trim() !== '' && avatar && !avatar.startsWith('blob:')) && (
+                <div className={`rounded-[20px] p-[18px] mt-4 border flex items-center gap-3 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                  <div className="w-10 h-10 rounded-full bg-[#C8932A]/20 text-[#C8932A] grid place-items-center shrink-0"><User className="w-5 h-5" /></div>
+                  <div className="flex-1 min-w-0">
+                    <b className="block text-[0.95rem]">Complete your profile</b>
+                    <small className={`block text-[0.85rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Add your name and photo so the couple knows who you are.</small>
                   </div>
-                  <h2 className="text-3xl font-display font-black tracking-tight mb-4">Three Decades of Legacy</h2>
-                  <p className={`text-sm font-medium leading-relaxed ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
-                    Celebrating 30 years of serene environments and community strength since 1996.
+                  <button onClick={() => setActiveTab('settings')} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest shrink-0">Set up</button>
+                </div>
+              )}
+
+              {/* OUR STORY */}
+              <section className="mt-8">
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Our story</h2>
+                <p className={`text-[0.95rem] leading-relaxed m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+                  {STORY}
+                </p>
+                <div className={`p-[16px_18px] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                  <strong className="block mb-0.5 text-[0.93rem]">How to share</strong>
+                  <p className={`m-0 text-[0.93rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+                    Tap Feed to browse, then tap Send to post a photo, video, reel or written wish. No email or password needed.
                   </p>
                 </div>
+              </section>
 
-                {/* Documentary Video */}
-                <div className="flex flex-col items-center justify-center mb-8 relative">
-                  <div className="relative w-full max-w-[280px] aspect-[9/16] rounded-[24px] overflow-hidden border-4 border-[#0E6B75] shadow-2xl bg-black group/video">
-                    <video
-                      src="https://res.cloudinary.com/qgvszym1/video/upload/v1784929959/Untitled_video_3_1_cafnet.mp4"
-                      className="w-full h-full object-cover"
-                      loop
-                      playsInline
-                      autoPlay
-                      muted
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover/video:opacity-100 transition-opacity" />
-                  </div>
-                </div>
-              </div>
-
-              {/* THE WEEK - EXACT REPLICATION */}
+              {/* THE JOURNEY */}
               <section className="mt-8">
-                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">The week</h2>
-                <div className="flex gap-2 overflow-x-auto no-scrollbar p-[2px_2px_10px]">
-                  {DAYS_DATA.map((d, i) => (
-                    <button 
-                      key={i} 
-                      onClick={() => setActiveDay(i)}
-                      className={`flex-shrink-0 border rounded-[16px] p-[8px_14px] text-center min-w-[64px] transition-colors ${activeDay === i ? 'bg-[#0E6B75] border-[#0E6B75] text-white' : (isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]')}`}
-                    >
-                      <small className={`block text-[0.75rem] ${activeDay === i ? 'opacity-[0.85]' : 'text-[#5A6970]'}`}>{d.l}</small>
-                      <b className="text-[1.05rem] font-display">{d.n}{i === 0 ? ' Nov' : ' Dec'}</b>
-                    </button>
-                  ))}
-                </div>
-
-                {/* Day-specific Image (Three Decades Legacy Linked) */}
-                <div className={`mb-3 rounded-[24px] overflow-hidden border aspect-video bg-black/5 dark:bg-white/5 relative ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-                  <AnimatePresence mode="wait">
-                    {dayImages[activeDay] ? (
-                      <motion.img 
-                        key={dayImages[activeDay]}
-                        initial={{ opacity: 0, scale: 1.1 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.9 }}
-                        transition={{ duration: 0.4 }}
-                        src={dayImages[activeDay]} 
-                        className="w-full h-full object-cover" 
-                        alt={`Programme Day ${activeDay + 1}`} 
-                      />
-                    ) : (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center opacity-20">
-                        <ImageIcon className="w-10 h-10 mb-2" />
-                        <span className="text-[10px] font-black uppercase tracking-widest">No photo set for this day</span>
-                      </div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                <div className={`rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                  {DAYS_DATA[activeDay].events.map((e, idx) => {
-                    const id = `day-${activeDay}-ev-${idx}`;
-                    const isBookmarked = bookmarks.includes(id);
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_4px] leading-[1.25]">The journey</h2>
+                <p className={`text-[0.9rem] m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Tap any event to see its memories.</p>
+                <div className="ml-[10px] pl-[20px] border-l-[3px] border-[#DAD8E3] dark:border-[#22363E] space-y-3">
+                  {EVENTS.map((e) => {
+                    const st = e.status || 'up';
+                    const cnt = posts.filter((p: any) => p?.eventId === e.id).length;
+                    const tagCls = st === 'done'
+                      ? 'bg-[#0E6B75]/10 text-[#0E6B75] border-[#0E6B75]/30'
+                      : st === 'next'
+                        ? 'bg-[#C8932A]/15 text-[#C8932A] border-[#C8932A]/40'
+                        : (isDarkMode ? 'bg-white/5 text-[#93A4AB] border-[#22363E]' : 'bg-[#EEEDF3] text-[#5A6970] border-[#DAD8E3]');
+                    const dotCls = st === 'done'
+                      ? 'bg-[#0E6B75] border-[#0E6B75]'
+                      : st === 'next'
+                        ? 'bg-[#C8932A] border-[#C8932A] shadow-[0_0_0_5px_rgba(200,147,42,0.18)]'
+                        : (isDarkMode ? 'bg-[#0B171C] border-[#93A4AB]' : 'bg-[#EEEDF3] border-[#5A6970]');
                     return (
-                      <div key={idx} className="flex gap-[14px] p-[14px_14px_14px_16px] items-start border-t first:border-t-0 border-[#DAD8E3] dark:border-[#22363E]">
-                        <div className="flex-shrink-0 w-[62px] font-display font-semibold text-[0.95rem] pt-[1px]">{e.t}</div>
-                        <div className="flex-1 min-w-0">
-                          <strong className="block leading-[1.3] text-sm">{e.title}</strong>
-                          <span className={`text-[0.88rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.v}</span>
+                      <button key={e.id} onClick={() => setActiveTab('feed')} className="relative block w-full text-left border-0 bg-transparent p-0 group">
+                        <span className={`absolute -left-[30px] top-[20px] w-[14px] h-[14px] rounded-full border-[3px] ${dotCls}`} />
+                        <div className={`rounded-[18px] border p-[14px_16px] transition-colors ${isDarkMode ? 'bg-[#13232A] border-[#22363E] group-hover:border-[#2FB3BF]/50' : 'bg-white border-[#DAD8E3] group-hover:border-[#0E6B75]/40'}`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <b className="text-[1rem] font-serif-display leading-tight">{e.name}</b>
+                            <span className={`flex-shrink-0 px-2.5 py-0.5 rounded-full border text-[10px] font-black uppercase tracking-wider ${tagCls}`}>
+                              {st === 'done' ? 'Done' : st === 'next' ? 'Next up' : 'Upcoming'}
+                            </span>
+                          </div>
+                          <small className={`block text-[0.78rem] mt-0.5 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.type ? `${e.type} · ` : ''}{fmtEventDate(e)}</small>
+                          <p className={`text-[0.9rem] m-0 mt-1.5 leading-snug ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{e.desc}</p>
+                          <small className={`block text-[0.72rem] font-bold uppercase tracking-wider mt-2 ${st === 'next' ? 'text-[#C8932A]' : 'text-[#0E6B75]'}`}>
+                            {cnt > 0 ? `See ${cnt} ${cnt === 1 ? 'memory' : 'memories'}` : 'Be the first to share'}
+                          </small>
                         </div>
-                        <button 
-                          onClick={() => toggleBookmark(id)}
-                          className={`border-0 bg-transparent p-1.5 rounded-[10px] transition-colors ${isBookmarked ? 'text-[#0E6B75]' : 'text-[#5A6970]'}`}
-                        >
-                          <BookmarkIcon active={isBookmarked} />
-                        </button>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
               </section>
 
-              {/* OUR STORY - EXACT REPLICATION */}
+              {/* WEDDING DAY DETAILS */}
               <section className="mt-8">
-                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Our story</h2>
-                <ol className="m-0 p-[6px_4px_0_4px] list-none">
-                  <TimelineItem year="1996" title="First keys handed over" desc="The first families moved in and the road to the gate was still sand." isDarkMode={isDarkMode} />
-                  <TimelineItem year="2003" title="Residents' association formed" desc="Neighbours organised to run security, water and sanitation together." isDarkMode={isDarkMode} />
-                  <TimelineItem year="2011" title="Borehole and perimeter fence" desc="Paid for by the residents themselves." isDarkMode={isDarkMode} />
-                  <TimelineItem year="2018" title="Clubhouse opens" desc="A home for weddings, meetings and Sunday football viewing." isDarkMode={isDarkMode} />
-                  <TimelineItem year="2026" title="Thirty years" desc="One week to celebrate everyone who built this place." isNow isDarkMode={isDarkMode} />
-                </ol>
-              </section>
-
-              {/* GOOD TO KNOW - EXACT REPLICATION */}
-              <section className="mt-8">
-                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Good to know</h2>
-                <div className={`p-[16px_18px] rounded-[20px] border mb-2.5 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                  <strong className="block mb-0.5 text-[0.93rem]">Dress code</strong>
-                  <p className={`m-0 text-[0.93rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
-                    Day 1 and Day 7: pearl white with one colour of your choice. Day 5: wear your block colours.
-                  </p>
-                </div>
-                <div className={`p-[16px_18px] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                  <strong className="block mb-0.5 text-[0.93rem]">Parking and gate access</strong>
-                  <p className={`m-0 text-[0.93rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
-                    Guest cars park on the field behind Block D from 4pm each evening. Gate staff will hold the guest list.
-                  </p>
-                </div>
-              </section>
-
-              {/* GET IN TOUCH - EXACT REPLICATION */}
-              <section className="mt-8">
-                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Get in touch</h2>
-                <div className={`p-[18px] flex flex-col gap-3 items-start rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-                  <p className="m-0 text-[0.93rem]">
-                    <strong className="font-bold">Anniversary committee</strong><br/>
-                    <span className={`${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Clubhouse, Ire-Akari Estate</span>
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <a href="tel:+2340000000000" className="inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_18px] font-bold bg-[#E1EFF0] dark:bg-[#173039] text-[#0E6B75] dark:text-[#4FC3CF] text-sm hover:scale-105 transition-transform">
-                      <PhoneIcon />
-                      Call committee
-                    </a>
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Wedding day</h2>
+                <p className={`text-[0.9rem] m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Saturday, 12 December 2026</p>
+                <div className={`p-[16px_18px] rounded-[20px] border space-y-3.5 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                  <div>
+                    <strong className="block text-[0.93rem]">Church wedding · {DETAILS.churchTime}</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{DETAILS.churchVenue}</p>
+                  </div>
+                  <div className={`border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`} />
+                  <div>
+                    <strong className="block text-[0.93rem]">Reception · {DETAILS.receptionTime}</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{DETAILS.receptionVenue}</p>
+                  </div>
+                  <div className={`border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`} />
+                  <div>
+                    <strong className="block text-[0.93rem]">Aso-ebi: {DETAILS.asoEbi}</strong>
+                    <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Share your looks with <span className="font-bold text-[#0E6B75] dark:text-[#2FB3BF]">{DETAILS.hashtag}</span></p>
                   </div>
                 </div>
               </section>
 
-              {/* Giant Stylized Footer with Interactive Photo Grid Background */}
-              <section className="relative overflow-hidden w-screen left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-[700px] sm:min-h-[850px] flex items-center justify-center bg-[#EEEDF3] dark:bg-[#0B171C]">
-                {/* INTERACTIVE PHOTO GRID BACKGROUND with AUTOMATIC SCANNING EFFECT */}
-                <div className="absolute inset-0 z-0 grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 auto-rows-fr opacity-60">
-                  <GridScanner isDarkMode={isDarkMode} />
+              {/* OUR VENDORS */}
+              <section className="mt-8">
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_4px] leading-[1.25]">Our vendors</h2>
+                <p className={`text-[0.9rem] m-[0_4px_14px] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Official media partners. They upload full albums here.</p>
+                <div className="flex gap-3">
+                  <div className={`flex-1 p-[14px_16px] rounded-[18px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <b className="block text-[0.95rem] font-serif-display">Lens &amp; Light Studio</b>
+                    <span className={`block text-[0.78rem] mt-0.5 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Photographer</span>
+                  </div>
+                  <div className={`flex-1 p-[14px_16px] rounded-[18px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <b className="block text-[0.95rem] font-serif-display">Kiln Films</b>
+                    <span className={`block text-[0.78rem] mt-0.5 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Videographer</span>
+                  </div>
+                </div>
+              </section>
+
+              {/* CTA */}
+              <section className="mt-8 mb-2">
+                <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Say something to the couple</h2>
+                <button
+                  onClick={() => setActiveTab('feed')}
+                  className="w-full border-0 rounded-[16px] py-3.5 font-bold bg-[#0E6B75] text-white text-[0.95rem] hover:scale-[1.02] active:scale-[0.98] transition-all"
+                >
+                  Open the feed
+                </button>
+              </section>
+
+              {/* GIANT FOOTER WITH INTERACTIVE PHOTO GRID (placeholders until photos arrive) */}
+              <section className="relative overflow-hidden w-screen left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] min-h-[700px] sm:min-h-[850px] flex items-center justify-center bg-[#EEEDF3] dark:bg-[#0B171C] mt-12">
+                <div className="absolute inset-0 z-0 grid grid-cols-10 auto-rows-fr opacity-60">
+                  <GridScanner isDarkMode={isDarkMode} images={footerPool} onTap={(src: string) => setFooterLightbox(src)} />
                 </div>
 
-                {/* THE OVERLAID NAME */}
                 <motion.div
                   initial="initial"
                   whileInView="animate"
@@ -1414,19 +1932,19 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     transition={{ duration: 0.8, ease: "circOut" }}
                   >
                     <h2 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase mb-0 text-[#0E6B75] drop-shadow-sm">
-                      I&nbsp;RE AKARI
+                      Dara
                     </h2>
                     <h2 className="text-[clamp(4rem,18vw,12rem)] font-black font-display tracking-[-0.08em] leading-[0.75] uppercase flex items-center justify-center gap-[0.05em] text-[#0E6B75] drop-shadow-sm">
-                      <span>ESTATE</span>
-                      <motion.div 
+                      <span>&amp; Femi</span>
+                      <motion.div
                         animate={{ scale: [1, 1.2, 1], rotate: [0, 12, 0] }}
                         transition={{ repeat: Infinity, duration: 4 }}
-                        className="w-[0.3em] h-[0.3em] rounded-full bg-[#0E6B75] opacity-80" 
+                        className="w-[0.3em] h-[0.3em] rounded-full bg-[#C8932A] opacity-80"
                       />
                     </h2>
                   </motion.div>
-                  
-                  <motion.div 
+
+                  <motion.div
                     initial={{ opacity: 0, width: 0 }}
                     whileInView={{ opacity: 1, width: '100%' }}
                     transition={{ delay: 0.4, duration: 1 }}
@@ -1434,26 +1952,25 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   >
                     <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
                     <p className="text-[clamp(0.8rem,3vw,1.5rem)] font-display font-black tracking-[0.4em] uppercase whitespace-nowrap opacity-60 text-[#0E6B75]">
-                      Soka, Ibadan
+                      12.12.2026, Lagos
                     </p>
                     <div className="h-[2px] flex-1 bg-[#0E6B75] opacity-20" />
                   </motion.div>
                 </motion.div>
               </section>
 
-              {/* Footer Links */}
               <footer className="py-10 text-center border-t border-[#DAD8E3] dark:border-[#22363E] mt-12 bg-white/50 dark:bg-black/20 backdrop-blur-sm rounded-[32px] mx-4">
                 <div className="flex flex-col items-center gap-3">
                   <div className="flex flex-col items-center">
-                    <h4 className="text-[1.1rem] font-black font-display text-[#0E6B75] mb-1">Ire-Akari Estate</h4>
-                    <p className={`text-xs ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Pearl Anniversary 1996 - 2026</p>
+                    <h4 className="text-[1.1rem] font-serif-display italic text-[#0E6B75] mb-1">Dara &amp; Femi</h4>
+                    <p className={`text-xs ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Happy Wedding · 12 December 2026</p>
                   </div>
-                  
                   <div className="pt-2 opacity-40">
-                     <p className="text-[0.65rem] font-bold uppercase tracking-widest">Built for the community</p>
+                    <p className="text-[0.65rem] font-bold uppercase tracking-widest">Wedding memories, kept for life</p>
                   </div>
                 </div>
               </footer>
+
             </motion.div>
           )}
 
@@ -1465,8 +1982,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               exit={{ opacity: 0 }}
               className="space-y-0 pt-3"
             >
-              {/* Segmented Control: Post vs Reels (shown here on Post tab; inside ReelsFeed scroll container on Reels tab so it scrolls up out of view) */}
-              {feedSubTab !== 'reels' && (
+              {/* Segmented Control: Post vs Reels (pinned at the top of the Feed on both tabs so users can always switch back) */}
+              {(
                 <div className={`flex items-center p-1.5 rounded-2xl mb-4 border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                   <button
                     onClick={() => setFeedSubTab('post')}
@@ -1503,9 +2020,11 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </div>
               ) : feedSubTab === 'post' ? (
                 <div className="border-t-[6px] border-[#D0CEDB] dark:border-[#1E323A]">
+                  {uploadingPost && <UploadingPostCard up={uploadingPost} isDarkMode={isDarkMode} />}
                   {(() => {
                     const regularPosts = posts.filter((p) => {
                       if (p.id === 'jubilee_documentary') return false;
+                      if (p.pending && !(isAdmin || p.authorUid === user?.uid)) return false;
                       const media: string[] = p.mediaUrls || (p.mediaUrl ? [p.mediaUrl] : []);
                       const hasVideo = media.some((u, idx) =>
                         p.mediaTypes?.[idx] === 'video' ||
@@ -1515,17 +2034,25 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                         u.includes('/video/')
                       );
                       const orientation = p.videoOrientation || videoOrientations[p.id];
-                      const isPortraitReel = hasVideo && media.length === 1 && orientation === 'portrait';
+                      const hasImage = media.some((u, idx) =>
+                        !(p.mediaTypes?.[idx] === 'video' ||
+                          u.toLowerCase().includes('.mp4') ||
+                          u.toLowerCase().includes('.webm') ||
+                          u.toLowerCase().includes('.mov') ||
+                          u.includes('/video/'))
+                      );
+                      const isPortraitReel = hasVideo && orientation === 'portrait' && !hasImage;
                       return !isPortraitReel;
                     });
 
                     if (regularPosts.length === 0) {
                       return (
-                        <div className="py-24 text-center opacity-30">
-                          <MessageSquare className="w-12 h-12 mx-auto mb-4" />
-                          <p className="font-black uppercase tracking-widest text-xs">No posts shared yet</p>
-                          <p className="text-[0.75rem] mt-2">Tap the center button to share text, photos, or landscape videos!</p>
-                        </div>
+                        <>
+                          <p className={`py-6 text-center text-[0.7rem] font-black uppercase tracking-widest ${isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]'}`}>Sample memories · real guest posts appear here</p>
+                          {SAMPLE_POSTS.filter((sp) => sp.mediaType !== 'reel').map((sp) => (
+                            <SamplePostCard key={sp.id} post={sp} isDarkMode={isDarkMode} liked={!!sampleLiked[sp.id]} onLike={() => setSampleLiked((m) => ({ ...m, [sp.id]: !m[sp.id] }))} onComment={() => setCommentsPost(sp)} onShare={() => setSharingPost(sp)} />
+                          ))}
+                        </>
                       );
                     }
 
@@ -1548,7 +2075,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           key={p.id}
                           id={p.id}
                           isDarkMode={isDarkMode}
-                          name={p.authorName || 'Resident'}
+                          name={p.authorName || 'Guest'}
                           text={p.text}
                           time={formattedDate}
                           mediaUrls={p.mediaUrls}
@@ -1556,13 +2083,21 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           likeCount={p.likeCount}
                           loveCount={p.loveCount}
                           avatar={p.authorPhoto}
+                          onAvatarClick={(u: string) => setAvatarZoom(u)}
                           isAdmin={isAdmin}
                           user={user}
                           onDelete={() => setPostToDelete(p.id)}
                           onLike={() => handleToggleReaction(p.id, 'like')}
                           onLove={() => handleToggleReaction(p.id, 'love')}
-                          onShare={() => setSharingPost(p)}
+                          onShare={() => sharePost(p)}
                           onOpenMedia={(mIdx: number) => setActiveMediaIndex({ postId: p.id, index: mIdx })}
+                          onComment={() => setCommentsPost(p)}
+                          commentCount={p.commentCount || 0}
+                          eventName={p.eventName || ''}
+                          authorRole={postRole(p)}
+                          authorUid={p.authorUid}
+                          pending={p.pending}
+                          onApprove={() => approvePost(p.id)}
                         />
                       );
 
@@ -1583,11 +2118,13 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     return feedElements;
                   })()}
                 </div>
-              ) : (
+                            ) : (
                 <ReelsFeed
+                  onAvatarClick={(u: string) => setAvatarZoom(u)}
                   reels={(() => {
                     const filteredReels = posts.filter((p) => {
                       if (p.id === 'jubilee_documentary') return false;
+                      if (p.pending && !(isAdmin || p.authorUid === user?.uid)) return false;
                       const media: string[] = p.mediaUrls || (p.mediaUrl ? [p.mediaUrl] : []);
                       const hasVideo = media.some((u, idx) =>
                         p.mediaTypes?.[idx] === 'video' ||
@@ -1597,14 +2134,25 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                         u.includes('/video/')
                       );
                       const orientation = p.videoOrientation || videoOrientations[p.id];
-                      return hasVideo && orientation === 'portrait';
+                      const hasImage = media.some((u, idx) =>
+                        !(p.mediaTypes?.[idx] === 'video' ||
+                          u.toLowerCase().includes('.mp4') ||
+                          u.toLowerCase().includes('.webm') ||
+                          u.toLowerCase().includes('.mov') ||
+                          u.includes('/video/'))
+                      );
+                      return hasVideo && orientation === 'portrait' && !hasImage;
                     });
 
+                    const finalReels = filteredReels.length > 0
+                      ? filteredReels
+                      : SAMPLE_POSTS.filter((sp) => sp.mediaType === 'reel');
+
                     const activeReelAds = shuffledReelAds.length > 0 ? shuffledReelAds : reelAds;
-                    if (activeReelAds.length === 0) return filteredReels;
+                    if (activeReelAds.length === 0) return finalReels;
 
                     const combinedReels: any[] = [];
-                    filteredReels.forEach((r, idx) => {
+                    finalReels.forEach((r, idx) => {
                       combinedReels.push(r);
                       // Place a video ad after every 3 reels
                       if ((idx + 1) % 3 === 0) {
@@ -1626,7 +2174,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                   onDelete={(id: string) => setPostToDelete(id)}
                   onLike={(id: string) => handleToggleReaction(id, 'like')}
                   onLove={(id: string) => handleToggleReaction(id, 'love')}
-                  onShare={(p: any) => setSharingPost(p)}
+                  onShare={(p: any) => sharePost(p)}
+                  onComment={(p: any) => setCommentsPost(p)}
                 />
               )}
             </motion.div>
@@ -1640,7 +2189,8 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               exit={{ opacity: 0 }}
               className="space-y-0"
             >
-              <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[14px_4px_12px] leading-[1.25]">Resident Profile</h2>
+              <TabErrorBoundary label="Settings (guest page)" isDarkMode={isDarkMode}>
+              <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[14px_4px_12px] leading-[1.25]">Guest Profile</h2>
               <div className={`p-[24px_18px] rounded-[24px] border mb-6 flex flex-col items-center gap-6 ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                 <div className="relative group">
                   <div className={`w-28 h-24 rounded-full overflow-hidden border-4 ${isDarkMode ? 'border-[#0B171C]' : 'border-[#EEEDF3]'} bg-[#0E6B75] flex items-center justify-center text-white text-3xl font-black`}>
@@ -1649,7 +2199,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     ) : (
                       <User className="w-10 h-10" />
                     )}
-                    {isUploading && <div className="absolute inset-0 bg-black/40 flex items-center justify-center"><Sparkles className="w-6 h-6 animate-spin" /></div>}
+
                   </div>
                   <input 
                     type="file" 
@@ -1688,14 +2238,14 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     <label className={`block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50 ${isDarkMode ? 'text-white' : 'text-[#14262D]'}`}>Display Name</label>
                     <input 
                       type="text"
-                      placeholder="e.g. Mr. Akari (Block B)"
+                      placeholder="e.g. Tolu (Dara's cousin)"
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
                       className={`w-full p-4 rounded-xl border-none outline-none font-bold transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
                     />
                   </div>
                   
-                  <button 
+<button 
                     onClick={saveProfile}
                     disabled={isSavingProfile}
                     className={`w-full py-3.5 rounded-full font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 ${
@@ -1705,13 +2255,14 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     {isSavingProfile ? 'Saving...' : (
                       <>
                         <Check className="w-4 h-4" />
-                        Save Profile
+                        Save profile
                       </>
                     )}
                   </button>
                 </div>
               </div>
 
+              
               <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[14px_4px_12px] leading-[1.25]">Appearance</h2>
               <div className={`p-[4px_0] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                 <div className="p-[14px_18px] flex items-center justify-between gap-4">
@@ -1752,13 +2303,13 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
               <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">About</h2>
               <div className={`p-[4px_0] rounded-[20px] border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
                 <div className="p-[14px_18px]">
-                  <strong className="block text-[1rem]">Ire-Akari 30</strong>
-                  <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Pearl Anniversary Community Portal. Established 1996.</small>
+                  <strong className="block text-[1rem]">Dara &amp; Femi 2026</strong>
+                  <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Wedding Memories Portal. Made with love.</small>
                 </div>
                 <div className="p-[14px_18px] flex items-center justify-between gap-4 border-t border-[#DAD8E3] dark:border-[#22363E]">
                   <div>
                     <strong className="block text-[1rem]">Report a problem</strong>
-                    <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Tell the committee if something looks wrong</small>
+                    <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Tell the couple if something looks wrong</small>
                   </div>
                   <button className="inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_18px] font-bold bg-[#E1EFF0] dark:bg-[#173039] text-[#0E6B75] dark:text-[#4FC3CF] text-sm">Report</button>
                 </div>
@@ -1767,7 +2318,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     onClick={() => {
                       const newCount = aboutClickCount + 1;
                       if (newCount >= 3) {
-                        handleAdminLogin();
+                        setAuthScreen('signin');
                         setAboutClickCount(0);
                       } else {
                         setAboutClickCount(newCount);
@@ -1775,48 +2326,61 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     }}
                     className={`text-xs font-bold tracking-wide select-none cursor-pointer ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}
                   >
-                    Happy 30th Anniversary
+                    Happy Wedding, Dara &amp; Femi
                   </span>
                 </div>
               </div>
 
               {isAdmin && (
-                <>
-                  <h2 className="text-[1.25rem] font-black font-display tracking-[-0.01em] m-[30px_4px_12px] leading-[1.25]">Administration</h2>
-                  <div className={`p-[4px_0] rounded-[20px] border border-[#0E6B75]/30 ${isDarkMode ? 'bg-[#0E6B75]/5' : 'bg-[#0E6B75]/5'}`}>
-                    <div className="p-[18px] flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#0E6B75]/20 flex items-center justify-center text-[#0E6B75]">
-                          <ShieldCheck className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <strong className="block text-[1rem]">Committee Control</strong>
-                          <small className={`block text-[0.85rem] leading-[1.35] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Manage access codes and settings</small>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => setIsAdminDashboardOpen(true)}
-                        className="inline-flex items-center justify-center gap-2 border-0 rounded-full p-[10px_20px] font-black bg-[#0E6B75] text-white text-xs uppercase tracking-widest hover:scale-105 transition-transform shadow-lg shadow-[#0E6B75]/20"
-                      >
-                        Open
-                      </button>
-                    </div>
-                  </div>
-                </>
+                <div className="pt-6 pb-2">
+                  <button onClick={goAdminPage} className="w-full py-4 rounded-[16px] bg-[#0E6B75] text-white text-[0.75rem] font-black uppercase tracking-widest">
+                    Open admin dashboard
+                  </button>
+                </div>
               )}
+              </TabErrorBoundary>
             </motion.div>
           )}
         </AnimatePresence>
       </main>
+      )}
 
-      {/* Admin Dashboard Modal */}
+      {/* Admin dashboard page (/admin) - separate page, not an overlay on the landing */}
+      {isAdminModalOpen && user && !user.isAnonymous && isAdmin && (
       <AdminDashboardModal 
         isOpen={isAdminModalOpen}
-        onClose={() => setIsAdminDashboardOpen(false)}
+        asPage={route === '/admin'}
+        onClose={leaveAdminPage}
         activeCode={activeAccessCode}
         onUpdateCode={updateAccessCode}
+        posts={posts}
+        videoOrientations={videoOrientations}
+        events={EVENTS}
+        story={STORY}
+        weddingDetails={DETAILS}
+        onSaveWedding={updateWedding}
+        vendors={vendors}
+        blockedUids={blockedUids}
+        vendorRequests={vendorRequests}
+        onUpdatePeople={updatePeople}
+        onVendorAction={handleVendorRequest}
+        approveGuestPosts={approveGuestPosts}
+        pushEnabled={pushEnabled}
+        archiveMode={archiveMode}
+        feedActionMode={feedActionMode}
+        onUpdateAppFlags={updateAppConfigFlags}
+        onDownloadEverything={downloadEverything}
+        onCreateMemoryBook={createMemoryBook}
+        onDeleteAllGuestData={deleteAllGuestData}
+        onDeletePost={(id: string) => {
+          setIsAdminDashboardOpen(false);
+          setPostToDelete(id);
+        }}
         isDarkMode={isDarkMode}
         heroImages={heroImages}
+        heroImageLabels={heroImageLabels}
+        onUpdateHeroLabels={updateHeroLabels}
+        onSaveWeddingSection={updateWeddingSection}
         onUpdateHeroImages={async (urls: string[]) => {
           const capped = urls.slice(0, 14);
           setHeroImages(capped);
@@ -1836,30 +2400,24 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
             showToast("Failed to update hero images.", "error");
           }
         }}
-        dayImages={dayImages}
-        onUpdateDayImages={async (urls: string[]) => {
+        footerImages={footerImages}
+        onUpdateFooterImages={async (urls: string[]) => {
+          const capped = urls.slice(0, 24);
+          setFooterImages(capped);
           try {
-            await setDoc(doc(db, 'app_config', 'main'), {
-              dayImages: urls,
-              lastUpdated: serverTimestamp()
-            }, { merge: true });
-            showToast("Programme images updated!");
-          } catch (err) {
-            console.error("Update day images error:", err);
-            showToast("Failed to update programme images.", "error");
+            localStorage.setItem('ann-footer-images', JSON.stringify(capped));
+          } catch {
+            // Ignore quota error
           }
-        }}
-        estateWebsiteUrl={estateWebsiteUrl}
-        onUpdateEstateUrl={async (url: string) => {
           try {
             await setDoc(doc(db, 'app_config', 'main'), {
-              estateWebsiteUrl: url,
+              footerImages: capped,
               lastUpdated: serverTimestamp()
             }, { merge: true });
-            showToast("Estate website link updated!");
+            showToast("Footer images updated!");
           } catch (err) {
-            console.error("Update estate url error:", err);
-            showToast("Failed to update website link.", "error");
+            console.error("Update footer images error:", err);
+            showToast("Failed to update footer images.", "error");
           }
         }}
         allAdmins={allAdmins}
@@ -1897,6 +2455,23 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           }
         }}
       />
+      )}
+
+      {/* /admin sign-in screen for signed-out visitors */}
+      {route === '/admin' && !(user && !user.isAnonymous && isAdmin) && (
+        <AuthScreen
+          screen={authScreen ?? 'signin'}
+          setScreen={setAuthScreen}
+          onClose={leaveAdminPage}
+          onSignIn={handleAdminLogin}
+          onSignup={handleAdminSignup}
+          onForgot={handleForgotPassword}
+          busy={authBusy}
+          error={authError}
+          clearError={() => setAuthError('')}
+          isDarkMode={isDarkMode}
+        />
+      )}
 
       <DeleteConfirmationModal 
         isOpen={!!postToDelete}
@@ -1940,28 +2515,14 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </button>
               </div>
 
-              <textarea 
-                placeholder="What's happening in Ire-Akari?"
-                value={newPostText}
-                onChange={(e) => setNewPostText(e.target.value)}
-                className={`w-full min-h-[140px] p-4 rounded-2xl border-none outline-none resize-none text-[1.05rem] font-medium transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
-              />
-
-              <div className="mt-4">
-                <input 
-                  type="password"
-                  placeholder={!configLoaded ? "Checking access code..." : "Enter Access Code"}
-                  value={accessCode}
-                  onChange={(e) => setAccessCode(e.target.value)}
-                  disabled={!configLoaded || !activeAccessCode}
-                  className={`w-full p-4 rounded-xl border-none outline-none font-black tracking-widest text-center transition-colors uppercase ${isDarkMode ? 'bg-[#0B171C] text-[#0E6B75] placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#0E6B75] placeholder-[#93A4AB]'} ${(!configLoaded || !activeAccessCode) ? 'opacity-50' : ''}`}
-                />
-                {!configLoaded && (
-                  <p className="text-[0.7rem] text-center mt-2 opacity-50 font-bold uppercase tracking-wider">Checking access code, please wait...</p>
-                )}
-                {configLoaded && !activeAccessCode && (
-                  <p className="text-[0.7rem] text-center mt-2 text-red-500 font-bold uppercase tracking-wider">Posting is temporarily unavailable</p>
-                )}
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-9 h-9 rounded-full overflow-hidden bg-[#0E6B75] flex items-center justify-center text-white font-bold shrink-0">
+                  {avatar && !avatar.startsWith('blob:') ? <img src={avatar} className="w-full h-full object-cover" alt="" /> : <span>{(displayName || 'G').charAt(0).toUpperCase()}</span>}
+                </div>
+                <div className="min-w-0">
+                  <b className="block text-[0.9rem] truncate">{displayName || 'Guest'}</b>
+                  <small className="block opacity-50 text-[0.75rem]">{(vendors || []).includes(user?.uid) ? 'Official vendor' : 'Guest'}</small>
+                </div>
               </div>
 
               {attachedMedia.length > 0 && (
@@ -1987,6 +2548,39 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </div>
               )}
 
+              <div className="mt-4">
+                <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-2">Which part of the celebration is this?</span>
+                <div className="flex flex-wrap gap-2">
+                  {EVENTS.map((e) => (
+                    <button key={e.id} type="button" onClick={() => setNewPostEvent(newPostEvent === e.id ? '' : e.id)} className={`px-4 py-2 rounded-full text-[0.8rem] font-bold border transition-all ${newPostEvent === e.id ? 'bg-[#0E6B75] text-white border-[#0E6B75]' : (isDarkMode ? 'border-[#22363E] text-[#93A4AB]' : 'border-[#DAD8E3] text-[#5A6970]')}`}>{e.name}</button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <input 
+                  type="password"
+                  placeholder={!configLoaded ? "Checking access code..." : "Enter Access Code"}
+                  value={accessCode}
+                  onChange={(e) => setAccessCode(e.target.value)}
+                  disabled={!configLoaded || !activeAccessCode}
+                  className={`w-full p-4 rounded-xl border-none outline-none font-black tracking-widest text-center transition-colors uppercase ${isDarkMode ? 'bg-[#0B171C] text-[#0E6B75] placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#0E6B75] placeholder-[#93A4AB]'} ${(!configLoaded || !activeAccessCode) ? 'opacity-50' : ''}`}
+                />
+                {!configLoaded && (
+                  <p className="text-[0.7rem] text-center mt-2 opacity-50 font-bold uppercase tracking-wider">Checking access code, please wait...</p>
+                )}
+                {configLoaded && !activeAccessCode && (
+                  <p className="text-[0.7rem] text-center mt-2 text-red-500 font-bold uppercase tracking-wider">Posting is temporarily unavailable</p>
+                )}
+              </div>
+
+
+              <textarea 
+                placeholder="What's happening at the celebration?"
+                value={newPostText}
+                onChange={(e) => setNewPostText(e.target.value)}
+                className={`mt-4 w-full min-h-[140px] p-4 rounded-2xl border-none outline-none resize-none text-[1.05rem] font-medium transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+              />
               <div className="mt-6 flex items-center justify-between">
                 <div className="flex gap-2">
                   <input 
@@ -2056,8 +2650,11 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 </div>
                 
                 <button 
-                  disabled={(!newPostText.trim() && attachedMedia.length === 0) || !accessCode.trim() || isPosting || !configLoaded || !activeAccessCode}
+                  disabled={(!newPostText.trim() && attachedMedia.length === 0) || isPosting || !configLoaded || !activeAccessCode}
                   onClick={async () => {
+                    if (archiveMode) { showToast('This wedding is archived. New posts are turned off.', 'error'); return; }
+                    if (!newPostEvent) { showToast('Select the part of the celebration first.', 'error'); return; }
+                    if (!accessCode.trim()) { showToast('Enter the access code before posting.', 'error'); return; }
                     if (normalizeCode(accessCode) === normalizeCode(activeAccessCode ?? '')) {
                       setIsPosting(true);
                       try {
@@ -2081,11 +2678,39 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                           setAvatar(finalAvatarUrl);
                         }
 
-                        // 2. Upload all temporary post files
+                        // 2. The post appears in the feed right away with its media
+                        // preview; the upload percentage renders on the card itself.
+                        const pendingFlag = approveGuestPosts && !(vendors || []).includes(user.uid) && !isAdmin;
+                        setUploadingPost({
+                          id: `local_${Date.now()}`,
+                          authorName: displayName || 'Guest',
+                          authorPhoto: finalAvatarUrl || null,
+                          text: newPostText,
+                          localMediaUrls: attachedMedia.map((m) => m.url),
+                          mediaTypes: attachedMedia.map((m) => m.type || 'image'),
+                          pending: pendingFlag,
+                          uploadProgress: 0
+                        });
+                        if (attachedMedia.length === 1 && attachedMedia[0].type === 'video' && attachedMedia[0].orientation === 'portrait') {
+                          setFeedSubTab('reels');
+                        } else {
+                          setFeedSubTab('post');
+                        }
+                        setIsComposeOpen(false);
+                        setNewPostText('');
+                        setAccessCode('');
+                        setNewPostEvent('');
+                        setAttachedMedia([]);
+
+                        // 3. Upload the media with live progress, then publish.
+                        let uploadedCount = 0;
+                        const totalFiles = attachedMedia.length || 1;
                         for (const item of attachedMedia) {
                           const tempFile = await get(item.id);
                           if (tempFile) {
-                            const url = await uploadToCloudinary(tempFile, 'posts');
+                            const url = await uploadToCloudinaryWithProgress(tempFile, 'posts', (pct) => {
+                              setUploadingPost((prev) => prev ? { ...prev, uploadProgress: Math.min(99, Math.round(((uploadedCount + pct / 100) / totalFiles) * 100)) } : prev);
+                            });
                             finalMediaUrls.push(url);
                             finalMediaTypes.push(item.type || 'image');
                             if (item.type === 'video' && item.orientation) {
@@ -2094,45 +2719,41 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                             // Cleanup IndexedDB
                             await del(item.id);
                           }
+                          uploadedCount++;
+                          setUploadingPost((prev) => prev ? { ...prev, uploadProgress: Math.min(99, Math.round((uploadedCount / totalFiles) * 100)) } : prev);
                         }
 
                         await addDoc(collection(db, 'posts'), {
                           authorUid: user.uid,
-                          authorName: displayName || 'Resident',
+                          authorName: displayName || 'Guest',
                           authorPhoto: finalAvatarUrl || null,
                           text: newPostText,
                           mediaUrls: finalMediaUrls,
                           mediaTypes: finalMediaTypes,
                           ...(postVideoOrientation ? { videoOrientation: postVideoOrientation } : {}),
+                          ...(newPostEvent ? { eventId: newPostEvent } : {}),
+                          pending: pendingFlag,
                           likeCount: 0,
                           loveCount: 0,
                           timestamp: serverTimestamp()
                         });
+                        setUploadingPost(null);
 
-                        setIsComposeOpen(false);
-                        setNewPostText('');
-                        setAccessCode('');
-                        setAttachedMedia([]);
-                        if (postVideoOrientation === 'portrait' && finalMediaUrls.length === 1) {
-                          setFeedSubTab('reels');
-                        } else {
-                          setFeedSubTab('post');
-                        }
-                        
-                        showToast('Memory shared successfully!');
+                        showToast(pendingFlag ? 'Shared. Waiting for the couple to approve' : 'Memory shared successfully!');
 
                       } catch (err) {
                         console.error("Post error:", err);
-                        showToast('Failed to share memory.', 'error');
+                        setUploadingPost(null);
+                        showToast('Failed to share memory. Check your connection and try again.', 'error');
                       } finally {
                         setIsPosting(false);
                       }
                     } else {
-                      showToast('Invalid access code. Check with committee.', 'error');
+                      showToast('Invalid access code. Check with the couple.', 'error');
                     }
                   }}
                   className={`px-8 py-3.5 rounded-full font-black text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
-                    ((newPostText.trim() || attachedMedia.length > 0) && accessCode.trim() && !isPosting)
+                    ((newPostText.trim() || attachedMedia.length > 0) && !isPosting)
                       ? 'bg-[#0E6B75] text-white shadow-lg hover:scale-105 active:scale-95' 
                       : 'bg-[#DAD8E3] dark:bg-[#22363E] text-[#5A6970] opacity-50'
                   }`}
@@ -2152,7 +2773,76 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
         )}
       </AnimatePresence>
 
-      {/* Bottom Nav - DYNAMIC FEED/SEND BUTTON */}
+      {/* Footer image lightbox */}
+      <AnimatePresence>
+        {footerLightbox && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setFooterLightbox(null)}
+              className="fixed inset-0 z-[140] bg-black/90 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.85, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={() => setFooterLightbox(null)}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[141] cursor-pointer"
+            >
+              <img
+                src={footerLightbox}
+                className="max-w-[86vw] max-h-[80vh] object-contain rounded-2xl shadow-2xl"
+                alt="Memory"
+              />
+              <button
+                onClick={(e) => { e.stopPropagation(); setFooterLightbox(null); }}
+                aria-label="Close"
+                className="absolute -top-3 -right-3 w-9 h-9 rounded-full bg-white text-[#14262D] shadow-lg grid place-items-center hover:bg-[#EEEDF3] transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {avatarZoom && (
+        <AvatarZoomModal src={avatarZoom} onClose={() => setAvatarZoom(null)} />
+      )}
+
+      {/* Admin email/password auth screens */}
+      {authScreen && (
+        <AuthScreen
+          screen={authScreen}
+          setScreen={setAuthScreen}
+          onClose={() => { setAuthScreen(null); setAuthError(''); }}
+          onSignIn={handleAdminLogin}
+          onSignup={handleAdminSignup}
+          onForgot={handleForgotPassword}
+          busy={authBusy}
+          error={authError}
+          clearError={() => setAuthError('')}
+          isDarkMode={isDarkMode}
+        />
+      )}
+      {user && !user.isAnonymous && mustSetPassword && !authScreen && (
+        <ForceSetPasswordScreen
+          isDarkMode={isDarkMode}
+          busy={setPasswordBusy}
+          error={authError}
+          newPassword={newPassword}
+          setNewPassword={setNewPassword}
+          confirmPassword={confirmNewPassword}
+          setConfirmPassword={setConfirmNewPassword}
+          onSubmit={handleSetPermanentPassword}
+          onSignOut={() => { signOut(auth); setMustSetPassword(false); setAuthError(''); }}
+        />
+      )}
+
+      {/* Bottom Nav - DYNAMIC FEED/SEND BUTTON (hidden while viewing full-portrait Reels or comments) */}
+      {!(activeTab === 'feed' && feedSubTab === 'reels') && !commentsPost && (
       <nav className={`fixed left-1/2 bottom-0 -translate-x-1/2 w-full max-w-[520px] z-[90] grid grid-cols-3 items-end p-[8px_12px_calc(8px+env(safe-area-inset-bottom,0px))] border-t transition-colors ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
         <button 
           onClick={() => setActiveTab('home')}
@@ -2198,6 +2888,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           <span>Settings</span>
         </button>
       </nav>
+      )}
 
       {/* iOS / Add to Home Screen Bottom Splash Pop Up (2 Steps - iOS only) */}
       <AnimatePresence>
@@ -2227,7 +2918,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     30
                   </div>
                   <div>
-                    <h3 className="text-lg font-black font-display leading-tight">Install Ire-Akari App</h3>
+                    <h3 className="text-lg font-black font-display leading-tight">Install Dara &amp; Femi</h3>
                     <p className={`text-xs ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
                       Add to your Home Screen for quick &amp; offline access
                     </p>
@@ -2298,10 +2989,22 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
           showToast={showToast}
         />
       )}
+
+      {commentsPost && (
+        <CommentsSheet
+          post={commentsPost}
+          isDarkMode={isDarkMode}
+          user={user}
+          displayName={displayName}
+          avatar={avatar}
+          isAdmin={isAdmin}
+          onClose={() => setCommentsPost(null)}
+        />
+      )}
       
       {activeMediaIndex && (
         <MediaLightbox 
-          post={posts.find(p => p.id === activeMediaIndex.postId) || (activeMediaIndex.postId === 'jubilee_documentary' ? { id: 'jubilee_documentary', authorName: 'Committee', mediaUrls: ['https://res.cloudinary.com/qgvszym1/video/upload/v1784929959/Untitled_video_3_1_cafnet.mp4'] } : null)}
+          post={posts.find(p => p.id === activeMediaIndex.postId) || null}
           initialIndex={activeMediaIndex.index}
           isDarkMode={isDarkMode}
           onClose={() => setActiveMediaIndex(null)}
@@ -2337,7 +3040,7 @@ function WhatsAppIcon({ className = "w-7 h-7" }: { className?: string }) {
 
 function ShareSheet({ post, isDarkMode, onClose, showToast }: any) {
   const shareUrl = `${window.location.origin}${window.location.pathname}?post=${post.id || post.uid}`;
-  const title = post.text || 'Check out this memory from Ire-Akari Estate 30th Anniversary!';
+  const title = post.text || "Check out this memory from Dara & Femi's wedding!";
 
   const shareOptions = [
     { 
@@ -2352,7 +3055,7 @@ function ShareSheet({ post, isDarkMode, onClose, showToast }: any) {
       color: 'bg-[#0E6B75]', 
       action: () => {
         navigator.clipboard.writeText(shareUrl);
-        if (showToast) showToast('Link copied to clipboard!');
+        if (showToast) showToast('Link copied');
       }
     },
     { 
@@ -2423,14 +3126,13 @@ function MediaLightbox({ post, initialIndex, isDarkMode, onClose }: any) {
   const isVideo = current?.toLowerCase().includes('.mp4') || current?.includes('/video/');
 
   const handleDownload = async () => {
-    if (isVideo) return;
     try {
       const response = await fetch(current);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `ire-akari-memory-${Date.now()}.jpg`;
+      a.download = `dara-femi-memory-${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -2513,37 +3215,11 @@ function MediaLightbox({ post, initialIndex, isDarkMode, onClose }: any) {
   );
 }
 
-function BookmarkIcon({ active }: { active: boolean }) {
-  return (
-    <svg className={`w-[22px] h-[22px] fill-none stroke-current stroke-[1.8] ${active ? 'fill-current' : ''}`} viewBox="0 0 24 24">
-      <path d="M7 4h10v16l-5-4-5 4z"/>
-    </svg>
-  );
-}
-
-function PhoneIcon() {
-  return (
-    <svg className="w-[19px] h-[19px] fill-none stroke-current stroke-[1.8]" viewBox="0 0 24 24">
-      <path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2z"/>
-    </svg>
-  );
-}
-
-function TimelineItem({ year, title, desc, isNow, isDarkMode }: { year: string; title: string; desc: string; isNow?: boolean; isDarkMode: boolean }) {
-  return (
-    <li className={`relative p-[0_0_22px_86px] before:absolute before:left-[64px] before:top-[6px] before:bottom-[-6px] before:w-[2px] ${isNow ? '' : 'before:bg-[#DAD8E3] dark:before:bg-[#22363E]'} last:before:hidden`}>
-      <div className={`absolute left-[58px] top-[6px] w-[14px] h-[14px] rounded-full shadow-[0_0_0_4px_var(--bg)] transition-all ${isNow ? 'bg-[#C9A24B] shadow-[0_0_0_4px_#EEEDF3,0_0_0_6px_#C9A24B] dark:shadow-[0_0_0_4px_#0B171C,0_0_0_6px_#C9A24B]' : 'bg-[#0E6B75]'}`} />
-      <time className="absolute left-0 top-0 w-[52px] text-right font-black font-display text-[1.1rem] tracking-tighter">{year}</time>
-      <strong className="block leading-[1.3] text-sm">{title}</strong>
-      <p className={`m-0 text-[0.9rem] ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>{desc}</p>
-    </li>
-  );
-}
-
 function Post({ 
   id, 
   name, 
   avatar, 
+  onAvatarClick,
   text, 
   time, 
   mediaUrls, 
@@ -2557,7 +3233,14 @@ function Post({
   onLike,
   onLove,
   onShare,
-  onOpenMedia
+  onOpenMedia,
+  onComment,
+  commentCount = 0,
+  eventName,
+  authorRole,
+  authorUid,
+  pending,
+  onApprove
 }: any) {
   const [localLiked, setLocalLiked] = useState(false);
   const [localLoved, setLocalLoved] = useState(false);
@@ -2588,29 +3271,57 @@ function Post({
   const displayLoved = localLoved;
   return (
     <article id={`post-${id}`} className="flex gap-3 p-[20px_4px] border-b-[6px] border-[#D0CEDB] dark:border-[#1E323A] transition-all">
-      <div className={`flex-shrink-0 w-[42px] h-[42px] rounded-full overflow-hidden border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'} bg-[#0E6B75] flex items-center justify-center text-white font-bold text-[0.9rem]`}>
+      <div
+        onClick={() => onAvatarClick && avatar && onAvatarClick(avatar)}
+        className={`flex-shrink-0 w-[42px] h-[42px] rounded-full overflow-hidden border ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'} bg-[#0E6B75] flex items-center justify-center text-white font-bold text-[0.9rem] ${avatar ? 'cursor-pointer hover:scale-105 transition-transform' : ''}`}
+      >
         {avatar ? <img src={avatar} className="w-full h-full object-cover" alt="" /> : <span>{name?.[0]?.toUpperCase() || 'R'}</span>}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <strong className="text-[1rem] leading-tight">{name}</strong>
+            {authorRole === 'vendor' && (<span className="ml-1 inline-block align-middle text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-[#21122B]">Official</span>)}
+            {authorRole === 'couple' && (<span className="ml-1 inline-block align-middle text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#0E6B75] text-white">Couple</span>)}
+            {pending && (<span className="ml-1 inline-block align-middle text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-white">Awaiting approval</span>)}
             <span className="text-[0.8rem] text-[#5A6970] dark:text-[#93A4AB] flex items-center gap-1">
               <span aria-hidden="true">·</span>
               <span>{time}</span>
             </span>
           </div>
-          {isAdmin && (
+          {eventName && (
+            <span className="block w-full text-[0.8rem] text-[#5A6970] dark:text-[#93A4AB]">{eventName}</span>
+          )}
+          <div className="contents">
+          </div>
+          {(isAdmin || (user && user.uid === authorUid)) && (
             <button 
               onClick={onDelete}
               className="p-1.5 text-red-500/60 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
-              title="Delete post"
+              title={isAdmin ? 'Delete post' : 'Remove your post'}
             >
               <Trash2 className="w-4 h-4" />
             </button>
           )}
         </div>
         {text && (
+          (!mediaUrls || mediaUrls.length === 0) ? (
+            <div className="m-[10px_0_2px] rounded-2xl bg-[#0E6B75]/[0.06] dark:bg-[#0E6B75]/15 p-[18px] relative">
+              <span aria-hidden="true" className="absolute -top-2 left-4 font-serif-display text-5xl text-[#0E6B75]/25 select-none leading-none">&ldquo;</span>
+              <p className="font-serif-display italic text-[1.08rem] leading-relaxed whitespace-pre-wrap m-0">
+                {displayedText}
+              </p>
+              {isLongText && (
+                <button
+                  type="button"
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="mt-1 text-[0.9rem] font-extrabold text-[#0E6B75] dark:text-[#4FC3CF] hover:underline focus:outline-none inline-flex items-center"
+                >
+                  {isExpanded ? 'See less' : 'See more'}
+                </button>
+              )}
+            </div>
+          ) : (
           <div className="m-[4px_0_0]">
             <p className="text-[1rem] leading-normal whitespace-pre-wrap inline">
               {displayedText}
@@ -2625,10 +3336,14 @@ function Post({
               </button>
             )}
           </div>
+          )
         )}
         
         {mediaUrls && mediaUrls.length > 0 && (
-          <div className={`mt-[10px] rounded-[18px] overflow-hidden border border-[#DAD8E3] dark:border-[#22363E] bg-black shadow-md ${mediaUrls.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
+          <div className={`mt-[10px] relative rounded-[18px] overflow-hidden border border-[#DAD8E3] dark:border-[#22363E] bg-black shadow-md ${mediaUrls.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
+            {eventName && (
+              <span className="absolute bottom-3 left-3 z-10 px-2.5 py-[3px] rounded-full bg-black/40 text-white text-[13px] pointer-events-none">{eventName}</span>
+            )}
             {mediaUrls.map((url: string, i: number) => {
               const isVideo = mediaTypes?.[i] === 'video' || url.toLowerCase().includes('.mp4') || url.toLowerCase().includes('.webm') || url.toLowerCase().includes('.mov') || url.includes('/video/');
               return (
@@ -2654,26 +3369,26 @@ function Post({
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-2 w-full mt-3 pt-2 border-t border-[#DAD8E3]/40 dark:border-[#22363E]/60">
-          <button 
+        <div className="grid grid-cols-3 gap-2 w-full mt-3">
+          <button
             onClick={onLike}
-            className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[0.85rem] font-bold transition-all ${displayLiked ? 'text-[#0E6B75] bg-[#0E6B75]/10' : 'text-[#5A6970] dark:text-[#93A4AB] hover:bg-[#0E6B75]/5'}`}
+            className={`flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border text-[13px] transition-all ${displayLiked ? 'text-[#0E6B75] dark:text-[#4FC3CF] border-[#0E6B75] dark:border-[#4FC3CF] font-bold' : 'text-[#5A6970] dark:text-[#93A4AB] border-[#DAD8E3] dark:border-[#22363E] font-medium hover:border-[#0E6B75]/60'}`}
           >
-            <ThumbsUp className={`w-[18px] h-[18px] ${displayLiked ? 'fill-current' : ''}`} />
-            <span>{likeCount > 0 ? (likeCount > 999 ? (likeCount/1000).toFixed(1) + 'K' : likeCount) : 'Like'}</span>
+            <ThumbsUp className="w-[17px] h-[17px]" />
+            <span>Like{likeCount > 0 ? ` ${likeCount}` : ''}</span>
           </button>
-          <button 
-            onClick={onLove}
-            className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[0.85rem] font-bold transition-all ${displayLoved ? 'text-red-500 bg-red-500/10' : 'text-[#5A6970] dark:text-[#93A4AB] hover:bg-red-500/5'}`}
+          <button
+            onClick={onComment}
+            className="flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[13px] font-medium text-[#5A6970] dark:text-[#93A4AB] hover:border-[#0E6B75]/60 transition-all"
           >
-            <Heart className={`w-[18px] h-[18px] ${displayLoved ? 'fill-current' : ''}`} />
-            <span>{loveCount > 0 ? (loveCount > 999 ? (loveCount/1000).toFixed(1) + 'K' : loveCount) : 'Love'}</span>
+            <MessageCircle className="w-[17px] h-[17px]" />
+            <span>Comment{commentCount > 0 ? ` ${commentCount}` : ''}</span>
           </button>
-          <button 
+          <button
             onClick={onShare}
-            className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[0.85rem] font-bold text-[#5A6970] dark:text-[#93A4AB] hover:bg-[#0E6B75]/5 transition-all"
+            className="flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[13px] font-medium text-[#5A6970] dark:text-[#93A4AB] hover:border-[#0E6B75]/60 transition-all"
           >
-            <Share2 className="w-[18px] h-[18px]" />
+            <Share2 className="w-[17px] h-[17px]" />
             <span>Share</span>
           </button>
         </div>
@@ -2874,24 +3589,20 @@ function PostAdCard({ ad, isDarkMode }: { ad: AdItem; isDarkMode: boolean; [key:
   );
 }
 
-function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete, onLike, onLove, onShare }: any) {
+function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete, onLike, onLove, onShare, onComment, onAvatarClick }: any) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const toggleRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll past the Post/Reels toggle bar onto the first reel when Reels opens,
-  // or allow the user to scroll back to the very top to tap Post/Reels while keeping
-  // each reel strictly snap-locked so the next video is only seen when swiping up.
+  // Snap-locked reels: the next video is only seen when swiping up.
+  // The Post/Reels toggle is pinned above this container, outside the scroll.
   const handleScroll = () => {
     if (!containerRef.current) return;
     const { scrollTop, clientHeight } = containerRef.current;
-    const toggleHeight = toggleRef.current ? toggleRef.current.offsetHeight : 0;
     if (clientHeight > 0) {
-      const adjustedScroll = Math.max(0, scrollTop - toggleHeight);
       const idx = Math.min(
         Math.max(0, reels.length - 1),
-        Math.round(adjustedScroll / clientHeight)
+        Math.round(scrollTop / clientHeight)
       );
       if (idx !== activeIndex) {
         setActiveIndex(idx);
@@ -2902,23 +3613,6 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
   if (!reels || reels.length === 0) {
     return (
       <div>
-        <div className={`flex items-center p-1.5 rounded-2xl mb-4 border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-          <button
-            onClick={onSwitchToPost}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap ${
-              isDarkMode ? 'text-[#93A4AB] hover:text-white' : 'text-[#5A6970] hover:text-[#14262D]'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>Post</span>
-          </button>
-          <button
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap bg-[#0E6B75] text-white shadow-md"
-          >
-            <Film className="w-4 h-4" />
-            <span>Reels</span>
-          </button>
-        </div>
         <div className="py-24 text-center opacity-30 border-t border-[#DAD8E3] dark:border-[#22363E]">
           <Film className="w-12 h-12 mx-auto mb-4" />
           <p className="font-black uppercase tracking-widest text-xs">No portrait reels yet</p>
@@ -2932,34 +3626,8 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="h-[calc(100dvh-96px)] min-h-[500px] w-full overflow-y-scroll snap-y snap-mandatory no-scrollbar relative rounded-[28px]"
+      className="h-[calc(100dvh-150px)] min-h-[420px] w-full overflow-y-scroll snap-y snap-mandatory no-scrollbar relative rounded-[20px]"
     >
-      {/* Post / Reels Toggle Switch inside the scroll container so it scrolls up out of view when viewing reels */}
-      <div ref={toggleRef} className="snap-start pb-3">
-        <div className={`flex items-center p-1.5 rounded-2xl border ${isDarkMode ? 'bg-[#13232A] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
-          <button
-            onClick={onSwitchToPost}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap ${
-              isDarkMode ? 'text-[#93A4AB] hover:text-white' : 'text-[#5A6970] hover:text-[#14262D]'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>Post</span>
-          </button>
-          <button
-            onClick={() => {
-              if (containerRef.current && toggleRef.current) {
-                containerRef.current.scrollTo({ top: toggleRef.current.offsetHeight, behavior: 'smooth' });
-              }
-            }}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap bg-[#0E6B75] text-white shadow-md"
-          >
-            <Film className="w-4 h-4" />
-            <span>Reels</span>
-          </button>
-        </div>
-      </div>
-
       {reels.map((reel: any, idx: number) => (
         <ReelCard
           key={reel.id}
@@ -2973,6 +3641,8 @@ function ReelsFeed({ reels, isDarkMode, isAdmin, user, onSwitchToPost, onDelete,
           onLike={() => onLike(reel.id)}
           onLove={() => onLove(reel.id)}
           onShare={() => onShare(reel)}
+          onComment={() => onComment && onComment(reel)}
+          onAvatarClick={onAvatarClick}
           hasNext={idx < reels.length - 1}
         />
       ))}
@@ -2991,6 +3661,8 @@ function ReelCard({
   onLike,
   onLove,
   onShare,
+  onComment,
+  onAvatarClick,
   hasNext
 }: any) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -2998,6 +3670,8 @@ function ReelCard({
   const [localLiked, setLocalLiked] = useState(false);
   const [localLoved, setLocalLoved] = useState(false);
 
+  const isSample = String(reel.id || '').startsWith('sample-');
+  const reelRole = postRole(reel);
   const media: string[] = reel.mediaUrls || (reel.mediaUrl ? [reel.mediaUrl] : []);
   const videoUrl = media.find((u: string, idx: number) =>
     reel.mediaTypes?.[idx] === 'video' ||
@@ -3008,7 +3682,7 @@ function ReelCard({
   ) || media[0];
 
   useEffect(() => {
-    if (!user || !reel.id) return;
+    if (isSample || !user || !reel.id) return;
     const reactionRef = doc(db, 'posts', reel.id, 'reactions', user.uid);
     const unsub = onSnapshot(reactionRef, (snap) => {
       if (snap.exists()) {
@@ -3026,17 +3700,27 @@ function ReelCard({
   useEffect(() => {
     const vid = videoRef.current;
     if (!vid) return;
-    if (isActive) {
-      vid.currentTime = 0;
-      vid.play().then(() => setIsPlaying(true)).catch(() => {
-        // Fallback if unmuted autoplay is blocked
-        vid.muted = true;
-        vid.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-      });
-    } else {
+    if (!isActive) {
       vid.pause();
       setIsPlaying(false);
+      return;
     }
+    // Reels always start with their sound on. If the browser blocks unmuted
+    // autoplay, retry once the video can play, and only fall back to muted
+    // as a last resort.
+    vid.currentTime = 0;
+    vid.muted = false;
+    setIsMuted(false);
+    const attempt = () => {
+      vid.play().then(() => setIsPlaying(true)).catch(() => {
+        vid.muted = true;
+        setIsMuted(true);
+        vid.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+      });
+    };
+    attempt();
+    vid.addEventListener('canplay', attempt, { once: true });
+    return () => vid.removeEventListener('canplay', attempt);
   }, [isActive]);
 
   const togglePlay = () => {
@@ -3063,8 +3747,15 @@ function ReelCard({
 
   return (
     <div
-      className="snap-start snap-always w-full h-full rounded-[28px] relative bg-black flex items-center justify-center overflow-hidden select-none shadow-2xl border border-[#DAD8E3] dark:border-[#22363E]"
+      className="snap-start snap-always w-full h-full rounded-[20px] relative bg-black flex items-center justify-center overflow-hidden select-none shadow-2xl border border-[#DAD8E3] dark:border-[#22363E]"
     >
+      {isSample ? (
+        <div className="absolute inset-0 flex items-center justify-center" style={{ background: sampleArt(reel.eventName) }}>
+          <div className="w-16 h-16 rounded-full bg-white/80 flex items-center justify-center">
+            <Play className="w-7 h-7 text-[#21122B] fill-current ml-0.5" />
+          </div>
+        </div>
+      ) : (
       <video
         ref={videoRef}
         src={videoUrl}
@@ -3074,6 +3765,7 @@ function ReelCard({
         muted={isMuted}
         onClick={togglePlay}
       />
+      )}
 
       {/* Play/Pause Center Indicator */}
       {!isPlaying && (
@@ -3081,8 +3773,8 @@ function ReelCard({
           onClick={togglePlay}
           className="absolute inset-0 flex items-center justify-center bg-black/20 cursor-pointer"
         >
-          <div className="w-16 h-16 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center text-white">
-            <Play className="w-8 h-8 fill-current ml-1" />
+          <div className="w-16 h-16 rounded-full bg-white/80 flex items-center justify-center">
+            <Play className="w-7 h-7 text-[#21122B] fill-current ml-0.5" />
           </div>
         </div>
       )}
@@ -3097,15 +3789,6 @@ function ReelCard({
           )}
         </div>
         <div className="flex items-center gap-2 pointer-events-auto">
-          {isAdmin && !reel.isAd && (
-            <button
-              onClick={onDelete}
-              className="p-2.5 rounded-full bg-black/50 text-red-400 hover:bg-red-500 hover:text-white backdrop-blur-md transition-colors"
-              title="Delete Reel"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          )}
           <button
             onClick={onToggleMute}
             className="p-2.5 rounded-full bg-black/50 text-white backdrop-blur-md hover:bg-black/70 transition-colors"
@@ -3115,32 +3798,64 @@ function ReelCard({
         </div>
       </div>
 
-      {/* Bottom Scrim & Author Info + Spread Action Bar */}
-      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/55 to-transparent p-5 pt-16 text-white z-10">
-        <div className="flex items-center gap-3 mb-2">
-          <div className={`w-10 h-10 rounded-full overflow-hidden border-2 flex items-center justify-center font-bold text-sm shrink-0 ${
-            reel.isAd ? 'border-[#C9A24B] bg-[#C9A24B] text-[#14262D]' : 'border-[#0E6B75] bg-[#0E6B75] text-white'
-          }`}>
+      {/* Vertical side action stack: like, comment, share */}
+      <div className="absolute right-2.5 bottom-[76px] z-20 flex flex-col items-center gap-4">
+        <button
+          onClick={isSample ? () => setLocalLiked((v) => !v) : onLike}
+          className="flex flex-col items-center gap-1 text-white"
+          aria-label="Like"
+        >
+          <span className={`w-12 h-12 rounded-full grid place-items-center ${localLiked ? 'bg-[#0E6B75]' : 'bg-black/40'}`}>
+            <ThumbsUp className="w-6 h-6" />
+          </span>
+          <span className="text-xs font-semibold">{(reel.likeCount || 0) + (isSample && localLiked ? 1 : 0)}</span>
+        </button>
+        <button onClick={() => onComment && onComment(reel)} className="flex flex-col items-center gap-1 text-white" aria-label="Comments">
+          <span className="w-12 h-12 rounded-full bg-black/40 grid place-items-center">
+            <MessageCircle className="w-6 h-6" />
+          </span>
+          <span className="text-xs font-semibold">{reel.commentCount || 0}</span>
+        </button>
+        <button onClick={onShare ? () => onShare(reel) : undefined} className="flex flex-col items-center gap-1 text-white" aria-label="Share">
+          <span className="w-12 h-12 rounded-full bg-black/40 grid place-items-center">
+            <Share2 className="w-6 h-6" />
+          </span>
+          <span className="text-xs font-semibold">Share</span>
+        </button>
+      </div>
+
+      {/* Bottom scrim & author info */}
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/55 to-transparent p-4 pt-11 pr-[84px] text-white z-10">
+        <div className="flex items-center gap-2.5">
+          <div
+            onClick={() => onAvatarClick && reel.authorPhoto && onAvatarClick(reel.authorPhoto)}
+            className={`w-[30px] h-[30px] rounded-full overflow-hidden flex items-center justify-center font-bold text-[13px] shrink-0 bg-[#0E6B75] text-white ${reel.authorPhoto && !reel.isAd ? 'cursor-pointer' : ''}`}
+          >
             {reel.isAd ? (
-              <Megaphone className="w-5 h-5" />
+              <Megaphone className="w-4 h-4" />
             ) : reel.authorPhoto ? (
               <img src={reel.authorPhoto} className="w-full h-full object-cover" alt="" />
             ) : (
-              <span>{(reel.authorName || 'R')[0].toUpperCase()}</span>
+              <span>{(reel.authorName || 'R').charAt(0).toUpperCase()}</span>
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <strong className="block text-sm font-bold leading-tight truncate">
-              {reel.isAd ? (reel.sponsorName || 'Featured Partner') : (reel.authorName || 'Resident')}
-            </strong>
-            <span className="text-[0.75rem] text-white/70">
-              {reel.isAd ? 'Sponsored Video' : formattedDate}
-            </span>
+            <div className="flex items-center flex-wrap gap-x-1.5">
+              <strong className="text-[0.9rem] font-bold leading-tight truncate">
+                {reel.isAd ? (reel.sponsorName || 'Featured Partner') : (reel.authorName || 'Guest')}
+              </strong>
+              {reelRole === 'vendor' && <span className="text-[10px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-[#21122B]">Official</span>}
+              {reelRole === 'couple' && <span className="text-[10px] font-bold px-2 py-[1px] rounded-full bg-[#0E6B75] text-white">Couple</span>}
+              <span className="text-[0.7rem] text-white/70"> · {reel.isAd ? 'Sponsored' : formattedDate}</span>
+            </div>
+            {(reel.isAd || reel.eventName) && (
+              <p className="text-[0.7rem] text-white/70 truncate">{reel.isAd ? 'Sponsored Video' : reel.eventName}</p>
+            )}
           </div>
         </div>
 
         {(reel.headline || reel.text || reel.description) && (
-          <div className="mb-3">
+          <div className="mt-1.5">
             {reel.headline && (
               <p className="text-sm font-bold text-white leading-snug">{reel.headline}</p>
             )}
@@ -3152,9 +3867,8 @@ function ReelCard({
           </div>
         )}
 
-        {/* Full-Width 3-Button Bar: Like, Love, Share (or Sponsored CTA for Reel Ads) */}
-        {reel.isAd ? (
-          <div className="w-full pt-2.5 border-t border-white/15">
+        {reel.isAd && (
+          <div className="w-full mt-2.5 pt-2.5 border-t border-white/15">
             {formatExternalUrl(reel.ctaUrl) ? (
               <a
                 href={formatExternalUrl(reel.ctaUrl)}
@@ -3171,98 +3885,266 @@ function ReelCard({
               </div>
             )}
           </div>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 w-full pt-2.5 border-t border-white/15">
-            <button
-              onClick={onLike}
-              className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
-                localLiked ? 'bg-[#0E6B75] text-white' : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              <ThumbsUp className={`w-4 h-4 ${localLiked ? 'fill-current' : ''}`} />
-              <span>{reel.likeCount > 0 ? reel.likeCount : 'Like'}</span>
-            </button>
-            <button
-              onClick={onLove}
-              className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
-                localLoved ? 'bg-red-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              <Heart className={`w-4 h-4 ${localLoved ? 'fill-current' : ''}`} />
-              <span>{reel.loveCount > 0 ? reel.loveCount : 'Love'}</span>
-            </button>
-            <button
-              onClick={onShare}
-              className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold bg-white/10 text-white hover:bg-white/20 transition-all"
-            >
-              <Share2 className="w-4 h-4" />
-              <span>Share</span>
-            </button>
-          </div>
         )}
       </div>
     </div>
   );
 }
 
-function CountdownTimer({ targetDate, isDarkMode }: { targetDate: Date; isDarkMode: boolean }) {
-  const [timeLeft, setTimeLeft] = useState({ d: 0, h: 0, m: 0, s: 0 });
+// Sample placeholder data matching the prototype feed (gradient tiles, no stock imagery)
+const VENDOR_AUTHOR_NAMES = ['Lens & Light Studio', 'Kiln Films'];
+const COUPLE_UID = 'p8BAKdDJEaYYJy0lHuQtzyntynr1';
+const postRole = (p: any): string => {
+  if (!p || p.isAd) return '';
+  if (p.authorRole) return p.authorRole;
+  if (VENDOR_AUTHOR_NAMES.includes(p.authorName || '')) return 'vendor';
+  if (p.authorUid === COUPLE_UID) return 'couple';
+  return '';
+};
+const EVENT_HUE_INDEX: Record<string, number> = {
+  'Introduction': 0, 'Engagement': 1, 'Court Wedding': 2, 'Bridal Shower': 3,
+  "Groom's Party": 4, 'Church Wedding': 5, 'Reception': 6, 'Thanksgiving': 7,
+};
+const sampleArt = (eventName?: string) => {
+  const h = ((EVENT_HUE_INDEX[eventName || ''] ?? 0) * 47 + 260) % 360;
+  return `linear-gradient(135deg, hsl(${h},55%,38%), hsl(${(h + 40) % 360},60%,22%))`;
+};
+const AVATAR_COLORS = ['#7b2d8e', '#0e6b57', '#c8932a', '#d23b5e', '#2b5fb3', '#555555'];
+const avatarColor = (name?: string) => AVATAR_COLORS[(name || 'G').length % AVATAR_COLORS.length];
+
+const SAMPLE_POSTS = [
+  { id: 'sample-1', authorName: 'Aunty Ronke', role: 'guest', eventName: 'Introduction', mediaType: 'image', text: 'Dara walking in with her aunties. We cried before the first prayer.', likeCount: 14, commentCount: 1, timeAgo: '20 Jun 2026, 16:20' },
+  { id: 'sample-2', authorName: 'Lens & Light Studio', role: 'vendor', eventName: 'Introduction', mediaType: 'image', text: 'Full introduction album, 212 photos, delivered.', likeCount: 31, commentCount: 0, timeAgo: '20 Jun 2026, 18:02' },
+  { id: 'sample-3', authorName: 'Tolu', role: 'guest', eventName: 'Engagement', mediaType: 'video', text: 'The exact moment Femi went down on one knee!', likeCount: 42, commentCount: 2, timeAgo: '18 Jul 2026, 12:41' },
+  { id: 'sample-4', authorName: 'Kiln Films', role: 'vendor', eventName: 'Engagement', mediaType: 'reel', text: 'Engagement highlight reel.', likeCount: 27, commentCount: 0, timeAgo: '18 Jul 2026, 13:15' },
+  { id: 'sample-5', authorName: 'Chidi', role: 'guest', eventName: 'Engagement', mediaType: 'wish', text: 'Femi, my guy. Dara, thank you for making him smile like this. Cheers to forever.', likeCount: 9, commentCount: 0, timeAgo: '18 Jul 2026, 21:30' },
+  { id: 'sample-6', authorName: 'Kemi', role: 'guest', eventName: 'Court Wedding', mediaType: 'reel', text: 'Signed, sealed, still in our work clothes.', likeCount: 19, commentCount: 0, timeAgo: '28 Aug 2026, 14:05' },
+  { id: 'sample-7', authorName: 'Dara', role: 'couple', eventName: 'Introduction', mediaType: 'reel', text: 'Dancing in before the families. Look at my mum!', likeCount: 58, commentCount: 0, timeAgo: '20 Jun 2026, 17:10' },
+];
+
+const SAMPLE_COMMENTS: Record<string, Array<{ authorName: string; timeAgo: string; text: string }>> = {
+  'sample-3': [
+    { authorName: 'Aunty Ronke', timeAgo: '18 Jul 2026, 13:02', text: 'I screamed so loud, my neck is still sore!' },
+    { authorName: 'Kemi', timeAgo: '18 Jul 2026, 13:20', text: 'Femi on one knee, I am not okay.' },
+  ],
+  'sample-1': [
+    { authorName: 'Chidi', timeAgo: '20 Jun 2026, 19:40', text: 'The family photos came out so well.' },
+  ],
+};
+// Shown in the feed in place of a post whose media is still uploading: the
+// caption and a preview land immediately, with the upload percentage on the
+// media itself.
+function UploadingPostCard({ up, isDarkMode }: { up: any; isDarkMode: boolean }) {
+  const pct = typeof up.uploadProgress === 'number' ? up.uploadProgress : 0;
+  const urls: string[] = up.localMediaUrls || [];
+  return (
+    <div className={`rounded-[20px] border p-4 mb-4 ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+      <div className="flex items-center gap-2.5 mb-3">
+        {up.authorPhoto ? (
+          <img src={up.authorPhoto} className="w-9 h-9 rounded-full object-cover" alt="" />
+        ) : (
+          <span className="w-9 h-9 rounded-full bg-[#0E6B75] text-white grid place-items-center font-black text-sm">{(up.authorName || 'G').charAt(0).toUpperCase()}</span>
+        )}
+        <div className="min-w-0">
+          <b className="block text-sm">{up.authorName}</b>
+          <p className="text-[0.7rem] opacity-50">Uploading… {pct}%</p>
+        </div>
+      </div>
+      {up.text && <p className="text-[0.95rem] mb-3 whitespace-pre-wrap">{up.text}</p>}
+      {urls.length > 0 && (
+        <div className="relative rounded-[16px] overflow-hidden bg-black">
+          {up.mediaTypes?.[0] === 'video' ? (
+            <video src={urls[0]} className="w-full max-h-[420px] object-cover" muted playsInline autoPlay loop />
+          ) : (
+            <img src={urls[0]} className="w-full max-h-[420px] object-cover" alt="" />
+          )}
+          <div className="absolute inset-0 bg-black/45 flex flex-col items-center justify-center gap-2.5">
+            <span className="w-9 h-9 rounded-full border-[3px] border-white/30 border-t-white animate-spin" />
+            <p className="text-white font-black text-sm">{pct}%</p>
+            <div className="w-2/3 h-1.5 rounded-full bg-white/25 overflow-hidden">
+              <div className="h-full bg-white transition-all duration-200" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        </div>
+      )}
+      {up.pending && <p className="text-[0.7rem] opacity-50 mt-3">Waiting for the couple to approve</p>}
+    </div>
+  );
+}
+
+function SamplePostCard({ post, isDarkMode, liked, onLike, onComment, onShare }: { post: any; isDarkMode: boolean; liked: boolean; onLike: () => void; onComment: () => void; onShare: () => void }) {
+  const isWish = post.mediaType === 'wish';
+  const isMotion = post.mediaType === 'video' || post.mediaType === 'reel';
+  const likeShown = (post.likeCount || 0) + (liked ? 1 : 0);
+  const mutedCls = isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]';
+  return (
+    <article className={`px-4 py-3.5 border-t-[6px] ${isDarkMode ? 'border-[#1E323A]' : 'border-[#DAD8E3]'}`}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-white text-[13px] font-bold shrink-0" style={{ background: avatarColor(post.authorName) }}>
+          {(post.authorName || 'G').charAt(0).toUpperCase()}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center flex-wrap gap-x-1.5">
+            <strong className="text-[0.95rem] leading-tight">{post.authorName}</strong>
+            {post.role === 'vendor' && <span className="text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#C8932A] text-[#21122B]">Official</span>}
+            {post.role === 'couple' && <span className="text-[11px] font-bold px-2 py-[1px] rounded-full bg-[#0E6B75] text-white">Couple</span>}
+            <span className={`text-[0.72rem] ${mutedCls}`}> · {post.timeAgo}</span>
+          </div>
+          <p className={`text-[0.72rem] ${mutedCls}`}>{post.eventName}</p>
+        </div>
+      </div>
+      {!isWish && <p className="text-[0.95rem] leading-relaxed mt-1">{post.text}</p>}
+      {isWish ? (
+        <p className="font-display italic text-[1.25rem] leading-[1.35] py-[14px] px-1">&ldquo;{post.text}&rdquo;</p>
+      ) : (
+        <div className="relative mt-2.5 rounded-[14px] overflow-hidden h-[240px] flex items-end p-3" style={{ background: sampleArt(post.eventName) }}>
+          {isMotion && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-[58px] h-[58px] rounded-full bg-white/80 flex items-center justify-center">
+                <Play className="w-6 h-6 text-[#21122B] fill-current ml-0.5" />
+              </div>
+            </div>
+          )}
+          <span className="relative px-2.5 py-[3px] rounded-full bg-black/40 text-white text-[13px]">{post.eventName}</span>
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-2 mt-2.5">
+        <button
+          onClick={onLike}
+          className={`flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border text-[13px] transition-all ${liked ? 'text-[#0E6B75] dark:text-[#4FC3CF] border-[#0E6B75] dark:border-[#4FC3CF] font-bold' : `${mutedCls} border-[#DAD8E3] dark:border-[#22363E] font-medium`}`}
+        >
+          <ThumbsUp className="w-[17px] h-[17px]" />
+          <span>Like{likeShown > 0 ? ` ${likeShown}` : ''}</span>
+        </button>
+        <button
+          onClick={onComment}
+          className={`flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[13px] font-medium ${mutedCls}`}
+        >
+          <MessageCircle className="w-[17px] h-[17px]" />
+          <span>Comment{post.commentCount > 0 ? ` ${post.commentCount}` : ''}</span>
+        </button>
+        <button
+          onClick={onShare}
+          className={`flex items-center justify-center gap-1.5 py-[9px] px-2 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[13px] font-medium ${mutedCls}`}
+        >
+          <Share2 className="w-[17px] h-[17px]" />
+          <span>Share</span>
+        </button>
+      </div>
+    </article>
+  );
+}
+function CommentsSheet({ post, isDarkMode, user, displayName, avatar, isAdmin, onClose }: any) {
+  const isSample = String(post?.id || '').startsWith('sample-');
+  const [comments, setComments] = useState<any[]>(isSample ? (SAMPLE_COMMENTS[post.id] || []) : []);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      const now = new Date().getTime();
-      const distance = targetDate.getTime() - now;
-      if (distance < 0) { clearInterval(timer); return; }
-      setTimeLeft({
-        d: Math.floor(distance / (1000 * 60 * 60 * 24)),
-        h: Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)),
-        m: Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60)),
-        s: Math.floor((distance % (1000 * 60)) / 1000)
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [targetDate]);
+    if (isSample || !post?.id) return;
+    const q = query(collection(db, 'posts', post.id, 'comments'), orderBy('createdAt', 'asc'));
+    const unsub = onSnapshot(q, (snap) => {
+      setComments(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, (err) => console.error('comments load failed', err));
+    return () => unsub();
+  }, [isSample, post?.id]);
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body || sending) return;
+    setSending(true);
+    try {
+      if (isSample) {
+        setComments((prev) => [...prev, { authorName: displayName || 'Guest', text: body, timeAgo: 'Just now' }]);
+      } else {
+        await addDoc(collection(db, 'posts', post.id, 'comments'), {
+          authorUid: user?.uid || null,
+          authorName: displayName || 'Guest',
+          authorPhoto: avatar || null,
+          text: body,
+          createdAt: serverTimestamp(),
+        });
+        await updateDoc(doc(db, 'posts', post.id), { commentCount: increment(1) });
+      }
+      setText('');
+    } catch (err) {
+      console.error('comment failed', err);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const removeComment = async (c: any) => {
+    if (isSample) {
+      setComments((prev) => prev.filter((x) => x !== c));
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, 'posts', post.id, 'comments', c.id));
+      await updateDoc(doc(db, 'posts', post.id), { commentCount: increment(-1) });
+    } catch (err) {
+      console.error('comment delete failed', err);
+    }
+  };
+
+  const mutedCls = isDarkMode ? 'text-[#5A6970]' : 'text-[#93A4AB]';
+  const fmt = (c: any) => {
+    if (c.createdAt?.toDate) {
+      return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(c.createdAt.toDate());
+    }
+    return c.timeAgo || 'Just now';
+  };
 
   return (
-    <div className="grid grid-cols-4 gap-2 mt-[22px]">
-      <TimerBlock value={timeLeft.d} label="days" />
-      <TimerBlock value={timeLeft.h} label="hours" />
-      <TimerBlock value={timeLeft.m} label="mins" />
-      <TimerBlock value={timeLeft.s} label="secs" />
-    </div>
-  );
-}
-
-function TimerBlock({ value, label }: { value: number; label: string }) {
-  const displayValue = value.toString().padStart(2, '0');
-  
-  return (
-    <div className="bg-white/10 border border-white/14 rounded-[16px] p-[10px_4px_8px] text-center overflow-hidden">
-      <div className="h-8 relative">
-        <AnimatePresence mode="popLayout">
-          <motion.b 
-            key={value}
-            initial={{ y: 30, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -30, opacity: 0 }}
-            transition={{ 
-              duration: 0.5, 
-              ease: [0.34, 1.56, 0.64, 1] // Springy bounce for rolling feel
-            }}
-            className="absolute inset-0 block text-[1.6rem] font-display leading-[1.1] font-mono"
-          >
-            {displayValue}
-          </motion.b>
-        </AnimatePresence>
+    <div className="fixed inset-0 z-[80] bg-black/60 flex items-end justify-center" onClick={onClose}>
+      <div
+        className={`w-full max-w-[430px] max-h-[85vh] overflow-y-auto rounded-t-[24px] px-[18px] pt-5 pb-[calc(22px+env(safe-area-inset-bottom,0px))] ${isDarkMode ? 'bg-[#13232A]' : 'bg-[#F6F5FA]'}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="font-display text-[22px] font-medium leading-tight">Comments{comments.length > 0 ? ` (${comments.length})` : ''}</h3>
+        {comments.length === 0 ? (
+          <p className={`my-4 text-[0.9rem] ${mutedCls}`}>No comments yet. Start the conversation.</p>
+        ) : (
+          comments.map((c, i) => (
+            <div key={c.id || i} className="flex gap-2.5 my-3">
+              <div className="w-[34px] h-[34px] rounded-full flex items-center justify-center text-white text-[13px] font-bold shrink-0" style={{ background: avatarColor(c.authorName) }}>
+                {(c.authorName || 'G').charAt(0).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[0.9rem]">
+                  <strong>{c.authorName || 'Guest'}</strong>
+                  <span className={`text-[0.75rem] ${mutedCls}`}> · {fmt(c)}</span>
+                </p>
+                <p className="text-[0.95rem] mt-0.5 whitespace-pre-wrap">{c.text}</p>
+                {(isAdmin || (user && c.authorUid === user.uid)) && (
+                  <button onClick={() => removeComment(c)} className="text-[13px] text-[#d23b3b] mt-1">Remove</button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+        <div className={`sticky bottom-0 flex items-center gap-2 pt-2 pb-1 ${isDarkMode ? 'bg-[#13232A]' : 'bg-[#F6F5FA]'}`}>
+          <div className="w-[34px] h-[34px] rounded-full bg-[#0E6B75] text-white flex items-center justify-center text-[13px] font-bold shrink-0 overflow-hidden">
+            {avatar ? <img src={avatar} className="w-full h-full object-cover" alt="" /> : <span>{(displayName || 'Y').charAt(0).toUpperCase()}</span>}
+          </div>
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+            placeholder="Add a comment…"
+            maxLength={500}
+            className={`flex-1 min-w-0 rounded-xl border px-3 py-2.5 text-[0.95rem] outline-none bg-transparent ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}
+          />
+          <button onClick={send} disabled={!text.trim() || sending} className="bg-[#0E6B75] text-white rounded-full px-4 py-2.5 font-semibold text-[0.9rem] disabled:opacity-40 shrink-0">Send</button>
+        </div>
       </div>
-      <small className="text-[0.72rem] opacity-[0.8] mt-1 block uppercase font-bold tracking-wider">{label}</small>
     </div>
   );
 }
 
-function GridScanner({ isDarkMode }: { isDarkMode: boolean }) {
+function GridScanner({ isDarkMode, images = [], onTap }: { isDarkMode: boolean; images?: string[]; onTap?: (src: string) => void }) {
   const [activeRow, setActiveRow] = useState(0);
-  const [direction, setDirection] = useState(1); 
+  const [direction, setDirection] = useState(1);
   const rowCount = 10;
 
   useEffect(() => {
@@ -3279,24 +4161,24 @@ function GridScanner({ isDarkMode }: { isDarkMode: boolean }) {
         }
         return next;
       });
-    }, 1500); 
+    }, 1500);
     return () => clearInterval(timer);
   }, [direction, rowCount]);
 
   return (
     <>
       {Array.from({ length: 80 }).map((_, i) => {
-        const colCount = 10; 
+        const colCount = 10;
         const rowIdx = Math.floor(i / colCount);
-        // Only the active row is "cleared" (showing image clearly)
         const isCurrentlyScanning = rowIdx === activeRow;
-        
         return (
-          <GridImage 
-            key={i} 
-            index={i} 
-            isDarkMode={isDarkMode} 
-            isCleared={isCurrentlyScanning} 
+          <GridImage
+            key={i}
+            index={i}
+            isDarkMode={isDarkMode}
+            isCleared={isCurrentlyScanning}
+            images={images}
+            onTap={onTap}
           />
         );
       })}
@@ -3304,50 +4186,83 @@ function GridScanner({ isDarkMode }: { isDarkMode: boolean }) {
   );
 }
 
-function GridImage({ index, isDarkMode, isCleared: autoCleared }: any) {
-  const [manualCleared, setManualCleared] = useState(false);
-  const isCleared = autoCleared || manualCleared;
-  
-  const images = [
-    'https://images.unsplash.com/photo-1531427186611-ecfd6d936c79?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1472653425572-fa511b1ea9be?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=200&q=80'
-  ];
-  
-  const imgSrc = images[index % images.length];
+function GridImage({ index, isDarkMode, isCleared: autoCleared, images = [], onTap }: any) {
+  const isCleared = autoCleared;
+  const pool = images.length > 0 ? images : PLACEHOLDER_IMAGES;
+  const imgSrc = pool[index % pool.length];
 
   return (
-    <div 
+    <div
       className="relative w-full aspect-square cursor-pointer group pointer-events-auto"
-      onClick={() => setManualCleared(!manualCleared)}
+      onClick={() => onTap && onTap(imgSrc)}
     >
-      <motion.img 
-        src={imgSrc} 
-        animate={{ 
+      <motion.img
+        src={imgSrc}
+        animate={{
           filter: isCleared ? 'grayscale(0%) brightness(1.1)' : 'grayscale(100%) brightness(0.8)',
           scale: isCleared ? 1.05 : 1
         }}
-        className="w-full h-full object-cover transition-all duration-700" 
-        alt="" 
+        className="w-full h-full object-cover transition-all duration-700"
+        alt=""
       />
-      <motion.div 
+      <motion.div
         initial={{ opacity: 1 }}
         animate={{ opacity: isCleared ? 0 : 1 }}
-        transition={{ duration: 0.8 }}
-        className={`absolute inset-0 pointer-events-none transition-colors ${isDarkMode ? 'bg-[#0B171C]/80' : 'bg-[#EEEDF3]/85'}`}
+        transition={{ duration: 0.4 }}
+        className={`absolute inset-0 ${isDarkMode ? 'bg-[#0B171C]/70' : 'bg-[#EEEDF3]/70'}`}
       />
     </div>
   );
 }
 
-
+// Circular zoom-in popup for a poster's profile picture. Starts as a modest
+// circle, and the expand button takes it to a near-full-screen view.
+function AvatarZoomModal({ src, onClose }: { src: string; onClose: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="fixed inset-0 z-[170] bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center"
+      >
+        <motion.div
+          initial={{ scale: 0.7, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.8, opacity: 0 }}
+          transition={{ type: 'spring', stiffness: 260, damping: 22 }}
+          onClick={(e) => e.stopPropagation()}
+          className="relative flex flex-col items-center"
+        >
+          <img
+            src={src}
+            alt="Profile"
+            onClick={() => setExpanded((v) => !v)}
+            className={`${expanded ? 'w-screen max-w-[100vw] h-[82vh] object-contain rounded-3xl' : 'w-[min(72vw,340px)] aspect-square object-cover rounded-full shadow-2xl'} cursor-zoom-in transition-all`}
+          />
+          <div className="flex items-center gap-3 mt-4">
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              aria-label={expanded ? 'Exit full screen' : 'View full screen'}
+              className="w-10 h-10 rounded-full bg-white/15 border border-white/40 text-white grid place-items-center hover:bg-white/25 transition-colors"
+            >
+              {expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="w-10 h-10 rounded-full bg-white/15 border border-white/40 text-white grid place-items-center hover:bg-white/25 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
 
 function DeleteConfirmationModal({ isOpen, onClose, onConfirm, isDarkMode }: any) {
   return (
@@ -3394,37 +4309,379 @@ function DeleteConfirmationModal({ isOpen, onClose, onConfirm, isDarkMode }: any
   );
 }
 
+
+function AuthScreen({ screen, setScreen, onClose, onSignIn, onSignup, onForgot, busy, error, clearError, isDarkMode }: {
+  screen: 'signin' | 'forgot' | 'sent';
+  setScreen: (s: 'signin' | 'forgot' | 'sent') => void;
+  onClose: () => void;
+  onSignIn: (email: string, password: string) => void;
+  onSignup: (email: string, password: string) => void;
+  onForgot: (email: string) => void;
+  busy: boolean;
+  error: string;
+  clearError: () => void;
+  isDarkMode: boolean;
+}) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [isFirstTime, setIsFirstTime] = useState(false);
+
+  const submit = () => {
+    if (!email.trim() || !password) { return; }
+    if (isFirstTime) { onSignup(email, password); } else { onSignIn(email, password); }
+  };
+
+  return (
+    <div className={`fixed inset-0 z-[300] flex items-center justify-center p-5 overflow-y-auto ${isDarkMode ? 'bg-[#0B171C]' : 'bg-[#F6F5FA]'}`}>
+      <div className={`w-full max-w-[430px] my-auto rounded-[28px] p-8 shadow-2xl ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}>
+        <button onClick={onClose} className={`mb-5 p-2 -ml-2 rounded-full hover:bg-black/5 ${isDarkMode ? 'text-[#5A6970]' : 'text-[#5A6970]'}`} aria-label="Close">
+          <X className="w-6 h-6" />
+        </button>
+
+        {screen === 'sent' ? (
+          <>
+            <div className="w-16 h-16 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center mx-auto mb-5">
+              <Mail className="w-8 h-8" />
+            </div>
+            <h2 className="text-center text-[1.6rem] font-black font-display tracking-tight mb-2">Check your email</h2>
+            <p className={`text-center text-[0.95rem] leading-relaxed mb-8 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+              We sent a password reset link. Follow it to set a new password, then come back and sign in.
+            </p>
+            <button
+              onClick={() => setScreen('signin')}
+              className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest hover:brightness-110 transition-all"
+            >
+              Back to sign in
+            </button>
+          </>
+        ) : screen === 'forgot' ? (
+          <>
+            <div className="w-16 h-16 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center mx-auto mb-5">
+              <KeyRound className="w-8 h-8" />
+            </div>
+            <h2 className="text-center text-[1.6rem] font-black font-display tracking-tight mb-2">Forgot password?</h2>
+            <p className={`text-center text-[0.95rem] leading-relaxed mb-8 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+              Enter the email on your admin account and we will send a reset link.
+            </p>
+            <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              className={`w-full p-4 rounded-xl border-none outline-none font-bold mb-4 ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+            />
+            {error && <p className="text-[0.85rem] font-bold text-[#C4453B] mb-4">{error}</p>}
+            <button
+              onClick={() => onForgot(email)}
+              disabled={busy || !email.trim()}
+              className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-[#0E6B75]/20 disabled:opacity-50 hover:brightness-110 transition-all"
+            >
+              {busy ? 'Sending…' : 'Send reset link'}
+            </button>
+            <button onClick={() => setScreen('signin')} className={`w-full py-4 font-bold text-xs uppercase tracking-widest ${isDarkMode ? 'text-white/40' : 'text-[#5A6970]'}`}>
+              Back to sign in
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="text-center mb-8">
+              <p className="font-display text-[#0E6B75] text-[0.85rem] font-medium mb-1">Dara &amp; Femi 2026</p>
+              <h2 className="text-[1.9rem] font-black font-display tracking-tight leading-tight">
+                {isFirstTime ? 'Create admin account' : 'Welcome back'}
+              </h2>
+              <p className={`text-[0.92rem] mt-1 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+                {isFirstTime ? 'Set up the couple dashboard sign-in.' : 'Sign in to the couple dashboard.'}
+              </p>
+            </div>
+            <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              className={`w-full p-4 rounded-xl border-none outline-none font-bold mb-4 ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+            />
+            <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Password</label>
+            <div className="relative mb-2">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+                placeholder="Your password"
+                autoComplete={isFirstTime ? 'new-password' : 'current-password'}
+                className={`w-full p-4 pr-12 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-[#5A6970]"
+              >
+                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              </button>
+            </div>
+            {!isFirstTime && (
+              <button onClick={() => setScreen('forgot')} className="text-[0.85rem] font-bold text-[#0E6B75] mb-2">
+                Forgot password?
+              </button>
+            )}
+            {error && <p className="text-[0.85rem] font-bold text-[#C4453B] my-3">{error}</p>}
+            <button
+              onClick={submit}
+              disabled={busy || !email.trim() || !password}
+              className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-[#0E6B75]/20 disabled:opacity-50 hover:brightness-110 transition-all mt-3"
+            >
+              {busy ? 'Please wait…' : isFirstTime ? 'Create account' : 'Sign in'}
+            </button>
+            <button
+              onClick={() => { setIsFirstTime(!isFirstTime); clearError(); }}
+              className={`w-full py-3 text-[0.85rem] font-bold ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}
+            >
+              {isFirstTime ? 'Already have an account? Sign in' : 'First time? Create an admin account'}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ForceSetPasswordScreen({ isDarkMode, busy, error, newPassword, setNewPassword, confirmPassword, setConfirmPassword, onSubmit, onSignOut }: {
+  isDarkMode: boolean;
+  busy: boolean;
+  error: string;
+  newPassword: string;
+  setNewPassword: (v: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (v: string) => void;
+  onSubmit: () => void;
+  onSignOut: () => void;
+}) {
+  const [show1, setShow1] = useState(false);
+  const [show2, setShow2] = useState(false);
+  const strength = newPassword.length >= 10 ? 'Strong' : newPassword.length >= 6 ? 'Okay' : 'Too short';
+  return (
+    <div className={`fixed inset-0 z-[310] flex items-center justify-center p-5 overflow-y-auto ${isDarkMode ? 'bg-[#0B171C]' : 'bg-[#F6F5FA]'}`}>
+      <div className={`w-full max-w-[430px] my-auto rounded-[28px] p-8 shadow-2xl ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}>
+        <div className="w-16 h-16 rounded-full bg-[#C8932A]/15 text-[#C8932A] flex items-center justify-center mx-auto mb-5">
+          <KeyRound className="w-8 h-8" />
+        </div>
+        <h2 className="text-center text-[1.7rem] font-black font-display tracking-tight mb-2">Set your permanent password</h2>
+        <p className={`text-center text-[0.95rem] leading-relaxed mb-8 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>
+          You signed in with a temporary password. Choose a permanent one before you continue.
+        </p>
+        <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>New password</label>
+        <div className="relative mb-4">
+          <input
+            type={show1 ? 'text' : 'password'}
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="At least 6 characters"
+            autoComplete="new-password"
+            className={`w-full p-4 pr-12 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+          />
+          <button type="button" onClick={() => setShow1(!show1)} aria-label={show1 ? 'Hide password' : 'Show password'} className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-[#5A6970]">
+            {show1 ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+          </button>
+        </div>
+        <label className={`block text-[0.7rem] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#93A4AB]' : 'text-[#5A6970]'}`}>Confirm new password</label>
+        <div className="relative mb-4">
+          <input
+            type={show2 ? 'text' : 'password'}
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && newPassword && confirmPassword) onSubmit(); }}
+            placeholder="Type it once more"
+            autoComplete="new-password"
+            className={`w-full p-4 pr-12 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+          />
+          <button type="button" onClick={() => setShow2(!show2)} aria-label={show2 ? 'Hide password' : 'Show password'} className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-[#5A6970]">
+            {show2 ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+          </button>
+        </div>
+        {newPassword && (
+          <p className={`text-[0.8rem] font-bold mb-3 ${newPassword.length >= 6 ? 'text-[#0E6B75]' : 'text-[#C4453B]'}`}>
+            Password strength: {strength}
+          </p>
+        )}
+        {error && <p className="text-[0.85rem] font-bold text-[#C4453B] mb-3">{error}</p>}
+        <button
+          onClick={onSubmit}
+          disabled={busy || !newPassword || !confirmPassword}
+          className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-[#0E6B75]/20 disabled:opacity-50 hover:brightness-110 transition-all"
+        >
+          {busy ? 'Saving…' : 'Save password & continue'}
+        </button>
+        <button onClick={onSignOut} className={`w-full py-4 font-bold text-xs uppercase tracking-widest ${isDarkMode ? 'text-white/40' : 'text-[#5A6970]'}`}>
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Renders the actual error message instead of a blank page when a section's
+// rendering fails, so a crash is always visible and fixable.
+class TabErrorBoundary extends React.Component<{ label: string; isDarkMode: boolean; children: any }, { error: any }> {
+  state = { error: null as any };
+  static getDerivedStateFromError(error: any) { return { error }; }
+  componentDidCatch(error: any, info: any) {
+    console.error(`Section "${this.props.label}" failed to render:`, error, info);
+  }
+  render() {
+    if (this.state.error) {
+      const msg = String(this.state.error?.message || this.state.error || 'Unknown error');
+      return (
+        <div className={`p-5 rounded-[20px] border border-[#C4453B]/40 ${this.props.isDarkMode ? 'bg-[#C4453B]/10' : 'bg-[#C4453B]/5'}`}>
+          <h3 className="font-black font-display text-lg text-[#C4453B] mb-1">This section could not load</h3>
+          <p className="text-sm opacity-70 mb-2">Section: {this.props.label}. Send the text below to your assistant to get it fixed.</p>
+          <code className="block p-3 rounded-lg bg-black/10 text-[0.7rem] break-words whitespace-pre-wrap">{msg}</code>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function AdminDashboardModal({ 
   isOpen, 
+  asPage, 
   onClose, 
   activeCode, 
   onUpdateCode, 
   isDarkMode, 
   heroImages, 
+  heroImageLabels,
+  onUpdateHeroLabels,
+  onSaveWeddingSection,
   onUpdateHeroImages,
-  dayImages,
-  onUpdateDayImages,
-  estateWebsiteUrl,
-  onUpdateEstateUrl,
+  footerImages,
+  onUpdateFooterImages,
   allAdmins,
   deletedPosts,
   onRestorePost,
   onPermanentDelete,
   currentUserEmail,
   adminPermissions,
+  videoOrientations,
+  events,
+  story,
+  weddingDetails,
+  onSaveWedding,
+  vendors,
+  blockedUids,
+  vendorRequests,
+  onUpdatePeople,
+  onVendorAction,
+  approveGuestPosts,
+  pushEnabled,
+  archiveMode,
+  feedActionMode,
+  onUpdateAppFlags,
+  onDownloadEverything,
+  onCreateMemoryBook,
+  onDeleteAllGuestData,
   showToast,
   onBackToMain,
   postAds = [],
   reelAds = [],
   onUpdatePostAds,
-  onUpdateReelAds
+  onUpdateReelAds,
+  posts = [],
+  onDeletePost
 }: any) {
   const [newCode, setNewCode] = useState(activeCode ?? '');
-  const [newUrl, setNewUrl] = useState(estateWebsiteUrl ?? 'https://ire-akari.estate');
   const [isDirty, setIsDirty] = useState(false);
   const [isBulkUploading, setIsBulkUploading] = useState(false);
-  const [activeAdminTab, setActiveAdminTab] = useState('settings');
+  const [activeAdminTab, setActiveAdminTab] = useState<string>(() => {
+    try {
+      const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null');
+      const storedTab = storedAdminUi?.tab;
+      return storedTab && ['overview', 'moderation', 'posts', 'events', 'hero', 'albums', 'settings', 'ads', 'recycle'].includes(storedTab) ? storedTab : 'overview';
+    } catch {
+      return 'overview';
+    }
+  });
+  const [mobileAdminNavOpen, setMobileAdminNavOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      const storedAdminUi = JSON.parse(localStorage.getItem('ann-admin-ui') || 'null') || {};
+      localStorage.setItem('ann-admin-ui', JSON.stringify({ ...storedAdminUi, tab: activeAdminTab }));
+    } catch {}
+  }, [activeAdminTab]);
+
+  // Photo albums live in the `albums` collection; every upload carries the
+  // uploader's name and the upload date.
+  useEffect(() => {
+    if (!isOpen) return;
+    const q = query(collection(db, 'albums'), orderBy('uploadedAt', 'desc'));
+    const unsub = onSnapshot(q, (snap) => setAlbums(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))), (err) => console.error('Albums load error:', err));
+    return () => unsub();
+  }, [isOpen]);
+
+  // Photographers and vendors see and do exactly one thing here: Photo albums.
+  const myAdminDoc = allAdmins.find((a: any) => a.email === currentUserEmail);
+  const restrictedRole = myAdminDoc?.role === 'photographer' || myAdminDoc?.role === 'vendor';
+  useEffect(() => {
+    if (restrictedRole && activeAdminTab !== 'albums') setActiveAdminTab('albums');
+  }, [restrictedRole, activeAdminTab]);
+
+  const uploadAlbumMedia = async (files: FileList | null, kind: 'photo' | 'video') => {
+    const list = Array.from(files || []);
+    if (!list.length) return;
+    setAlbumBusy(true);
+    let ok = 0;
+    const uploaderName = (currentUserEmail || 'Admin').split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+    for (const file of list) {
+      try {
+        const url = await uploadToCloudinary(file, 'albums');
+        await addDoc(collection(db, 'albums'), {
+          mediaUrl: url,
+          mediaType: kind === 'video' ? 'video' : 'image',
+          uploaderName,
+          uploaderEmail: currentUserEmail,
+          uploadedAt: serverTimestamp()
+        });
+        ok++;
+      } catch (err) {
+        console.error('Album upload error:', err);
+      }
+    }
+    setAlbumBusy(false);
+    if (showToast) showToast(ok === list.length ? `Added ${ok} ${kind === 'video' ? 'video' : 'photo'}${ok === 1 ? '' : 's'} to the album.` : `Uploaded ${ok} of ${list.length}. The rest failed, try again.`, ok ? 'success' : 'error');
+  };
+
+  const deleteAlbumMedia = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'albums', id));
+      if (showToast) showToast('Removed from the album.', 'success');
+    } catch (err) {
+      console.error('Album delete error:', err);
+      if (showToast) showToast('Could not remove it. Try again.', 'error');
+    }
+  };
+
+  const handleAdminSignOut = () => {
+    try { localStorage.removeItem('ann-admin-ui'); } catch {}
+    signOut(auth);
+    onClose();
+  };
   const [newAdminEmail, setNewAdminEmail] = useState('');
+  // All posts preview: the post being watched/viewed full-screen from the list.
+  const [adminViewerPost, setAdminViewerPost] = useState<any>(null);
+  // Label to attach to newly uploaded hero photos.
+  const [newHeroLabel, setNewHeroLabel] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('vendor');
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteResult, setInviteResult] = useState<{ email: string; tempPassword: string } | null>(null);
 
   // Super Admin Ad Creation & Editing State
   const [adTypeTab, setAdTypeTab] = useState<'post' | 'reel'>('post');
@@ -3449,13 +4706,60 @@ function AdminDashboardModal({
     setAdMediaTypes(type === 'reel' ? ['video'] : []);
   };
 
-  // Sync newCode & newUrl with live values
+  const daysToWedding = Math.max(0, Math.ceil((new Date(`${WEDDING_DATE}T11:00:00`).getTime() - Date.now()) / 86400000));
+
+  const inviteDashboardAccess = async () => {
+    const email = inviteEmail.trim();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      showToast('Enter a valid email address.', 'error');
+      return;
+    }
+    setInviteBusy(true);
+    try {
+      const currentUser = auth.currentUser;
+      const token = currentUser ? await currentUser.getIdToken() : '';
+      const tempPassword = 'DF' + Math.random().toString(36).slice(2, 10);
+      const res = await fetch('/api/auth-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'invite', email, password: tempPassword, role: inviteRole })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        const rolePerms: any = inviteRole === 'couple'
+          ? { canDeletePosts: true, canUploadImages: true, canSetAccessCode: true }
+          : { canDeletePosts: false, canUploadImages: true, canSetAccessCode: false };
+        try {
+          await setDoc(doc(db, 'admins', email.toLowerCase().trim()), {
+            email: email.toLowerCase().trim(),
+            role: inviteRole,
+            permissions: rolePerms,
+            addedAt: serverTimestamp(),
+            addedBy: currentUserEmail
+          }, { merge: true });
+        } catch (permErr) {
+          console.error('Admin doc write error:', permErr);
+        }
+        setInviteResult({ email, tempPassword });
+        setInviteEmail('');
+        showToast('Dashboard access created. Share the temporary password now.', 'success');
+      } else {
+        showToast(data.error || 'Could not create the account. Try again.', 'error');
+      }
+    } catch (err) {
+      console.error('Invite error:', err);
+      showToast('Could not reach the invite service.', 'error');
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  // Sync newCode with live value
   useEffect(() => {
     if (isOpen && !isDirty) {
       setNewCode(activeCode ?? '');
-      setNewUrl(estateWebsiteUrl ?? 'https://ire-akari.estate');
     }
-  }, [activeCode, estateWebsiteUrl, isOpen, isDirty]);
+  }, [activeCode, isOpen, isDirty]);
 
   // Reset dirty flag when closing/opening
   useEffect(() => {
@@ -3464,11 +4768,117 @@ function AdminDashboardModal({
 
   const isSuper = currentUserEmail === "justfashion414@gmail.com";
 
+  const [modQueue, setModQueue] = useState<'pending' | 'reports' | 'vendors'>('pending');
+  const [postEventFilter, setPostEventFilter] = useState<string>('all');
+
+  const [evDraft, setEvDraft] = useState<WeddingEvent[]>(events);
+  const [storyDraft, setStoryDraft] = useState<string>(story);
+  const [detDraft, setDetDraft] = useState<any>(weddingDetails);
+  const [weddingBusy, setWeddingBusy] = useState(false);
+  useEffect(() => { setEvDraft(events); }, [events]);
+  useEffect(() => { setStoryDraft(story); }, [story]);
+  useEffect(() => { setDetDraft(weddingDetails); }, [weddingDetails]);
+
+  const inputCls = `w-full p-3.5 rounded-xl border-none outline-none font-bold text-sm ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`;
+  // The photos the hero actually shows right now: the admin's list when one
+  // exists, otherwise the built-in placeholder photos the site falls back to.
+  // Editing from the admin grid always writes the full list, so removing a
+  // placeholder or adding a photo takes the hero over from the placeholders.
+  const heroShown: string[] = heroImages.length ? heroImages : PLACEHOLDER_IMAGES;
+
+  // Per-section saves: each card in Events & details commits on its own, so the
+  // couple never has to save unrelated sections together. The Preview button
+  // saves everything first, then opens the live website in a new tab so they
+  // can see the changes without leaving the console.
+  const saveStory = async () => { setWeddingBusy(true); try { await onSaveWeddingSection({ story: storyDraft }); } finally { setWeddingBusy(false); } };
+  const saveDetails = async () => { setWeddingBusy(true); try { await onSaveWeddingSection({ weddingDetails: detDraft }); } finally { setWeddingBusy(false); } };
+  const saveEvents = async () => { setWeddingBusy(true); try { await onSaveWeddingSection({ events: evDraft }); } finally { setWeddingBusy(false); } };
+  const previewSite = async () => {
+    setWeddingBusy(true);
+    try { await onSaveWedding(evDraft, storyDraft, detDraft); } finally { setWeddingBusy(false); }
+    window.open('/', '_blank');
+  };
+
+  const saveWedding = async () => {
+    setWeddingBusy(true);
+    try {
+      await onSaveWedding(evDraft, storyDraft, detDraft);
+    } finally {
+      setWeddingBusy(false);
+    }
+  };
+
+  const [dangerText, setDangerText] = useState('');
+  const [deleteAllBusy, setDeleteAllBusy] = useState(false);
+  const [postTypeFilter, setPostTypeFilter] = useState<string>('all');
+  // Recycle bin: confirm before restoring or permanently removing a post.
+  const [binConfirm, setBinConfirm] = useState<{ id: string; action: 'restore' | 'remove' } | null>(null);
+  // Photo albums: media uploaded by photographers and vendors.
+  const [albums, setAlbums] = useState<any[]>([]);
+  const [albumBusy, setAlbumBusy] = useState(false);
+  const nowHour = new Date().getHours();
+  const greeting = nowHour < 12 ? 'Good morning' : nowHour < 17 ? 'Good afternoon' : 'Good evening';
+  const pendCount = posts.filter((p: any) => p.pending).length;
+  const reportCount = posts.filter((p: any) => ((p as any).reports || 0) > 0).length;
+  const modTotal = pendCount + reportCount + vendorRequests.length;
+  const relTime = (d: Date | null) => {
+    if (!d) return 'just now';
+    const s = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (s < 60) return 'just now';
+    const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+    const dd = Math.floor(h / 24); if (dd < 7) return `${dd}d ago`;
+    const w = Math.floor(dd / 7); if (w < 5) return `${w}w ago`;
+    const mo = Math.floor(dd / 30); if (mo < 12) return `${mo} month${mo === 1 ? '' : 's'} ago`;
+    return `${Math.floor(dd / 365)}y ago`;
+  };
+  const postTypeOf = (p: any): 'Photo' | 'Video' | 'Reel' | 'Wish' => {
+    const isVid = (p.mediaTypes || []).some((t: string) => t === 'video') || (p.mediaUrls || []).some((u: string) => /\.(mp4|webm|mov)(\?|$)/i.test(u));
+    if (isVid) return ((p.videoOrientation || (videoOrientations as any)[p.id]) === 'portrait' ? 'Reel' : 'Video');
+    const hasImg = (p.mediaTypes || []).some((t: string) => t === 'image') || (p.mediaUrls || []).some((u: string) => /\.(jpe?g|png|webp|gif)(\?|$)/i.test(u));
+    return hasImg ? 'Photo' : 'Wish';
+  };
+  const handleDismissReport = async (id: string) => {
+    try {
+      await updateDoc(doc(db, 'posts', id), { reports: 0 });
+      showToast('Report dismissed', 'success');
+    } catch (err) {
+      console.error('Dismiss error:', err);
+      showToast('Could not dismiss the report.', 'error');
+    }
+  };
+
   const normalizedNewCode = normalizeCode(newCode);
   const normalizedActiveCode = normalizeCode(activeCode ?? '');
   const isCodeValid = normalizedNewCode.length >= 4;
   const isCodeChanged = normalizedNewCode !== normalizedActiveCode;
   const canSaveCode = isCodeValid && isCodeChanged;
+
+  // Saves a post's media file straight to the admin's device from the All posts
+  // list (the Download button on each row).
+  const adminDownloadMedia = async (p: any) => {
+    const urls = Array.isArray(p.mediaUrls) ? p.mediaUrls : (p.mediaUrl ? [p.mediaUrl] : []);
+    if (!urls.length) { if (showToast) showToast('There is no photo or video on this post.', 'error'); return; }
+    try {
+      const res = await fetch(urls[0]);
+      if (!res.ok) throw new Error('fetch failed');
+      const blob = await res.blob();
+      const u = urls[0];
+      const isVideo = p.mediaTypes?.[0] === 'video' || u.toLowerCase().includes('.mp4') || u.toLowerCase().includes('.webm') || u.toLowerCase().includes('.mov') || u.includes('/video/');
+      const ext = isVideo ? 'mp4' : (u.split('?')[0].split('.').pop() || 'jpg').slice(0, 5);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `dara-femi-${String(p.authorName || 'memory').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24)}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      if (showToast) showToast('Saved to your device.', 'success');
+    } catch (err) {
+      console.error('Admin media download failed:', err);
+      if (showToast) showToast('Could not download the file. Please try again.', 'error');
+    }
+  };
 
   const handleAddAdmin = async () => {
     if (!newAdminEmail.trim() || !newAdminEmail.includes('@')) return;
@@ -3517,6 +4927,7 @@ function AdminDashboardModal({
     <AnimatePresence>
       {isOpen && (
         <>
+          {!asPage && (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -3524,91 +4935,499 @@ function AdminDashboardModal({
             onClick={onClose}
             className="fixed inset-0 bg-black/60 z-[110] backdrop-blur-sm"
           />
+          )}
           <motion.div 
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.9, opacity: 0 }}
-            className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-[500px] z-[111] rounded-[32px] p-0 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 24 }}
+            className={`fixed inset-0 z-[111] p-0 shadow-2xl overflow-hidden flex flex-col ${isDarkMode ? 'bg-[#13232A]' : 'bg-white'}`}
           >
-            {/* Modal Header */}
-            <div className={`p-6 border-b ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <ShieldCheck className="w-8 h-8 text-[#0E6B75]" />
-                  <h3 className="text-2xl font-black font-display tracking-tight">Admin Control</h3>
-                </div>
-                <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5"><X className="w-6 h-6" /></button>
-              </div>
-
-              {/* Tabs */}
-              <div className="flex gap-1 p-1 rounded-2xl bg-black/5">
-                {[
-                  { id: 'settings', label: 'Settings', icon: Settings, show: true },
-                  { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper },
-                  { id: 'admins', label: 'Admins', icon: Users, show: isSuper },
-                  { id: 'recycle', label: 'Bin', icon: Trash, show: adminPermissions?.canDeletePosts }
-                ].filter(t => t.show).map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveAdminTab(tab.id)}
-                    className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeAdminTab === tab.id ? (isDarkMode ? 'bg-[#0E6B75] text-white shadow-lg' : 'bg-white text-[#0E6B75] shadow-sm') : 'opacity-40 hover:opacity-100'}`}
-                  >
-                    <tab.icon className="w-4 h-4 shrink-0" />
-                    <span>{tab.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto p-8 pt-6">
-              {activeAdminTab === 'settings' && (
-                <div className="space-y-8">
-                  {adminPermissions?.canSetAccessCode && (
-                    <div>
-                      <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Active Access Code</label>
-                      <div className="flex gap-2">
-                        <input 
-                          type="text"
-                          value={newCode}
-                          maxLength={20}
-                          onChange={(e) => {
-                            const val = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase();
-                            setNewCode(val);
-                            setIsDirty(true);
-                          }}
-                          className={`flex-1 p-4 rounded-xl border-none outline-none font-black tracking-widest transition-colors ${isDarkMode ? 'bg-[#0B171C] text-[#0E6B75]' : 'bg-[#EEEDF3] text-[#0E6B75]'}`}
-                        />
-                        <button 
-                          onClick={async () => {
-                            await onUpdateCode(newCode);
-                            setIsDirty(false);
-                          }}
-                          disabled={!canSaveCode}
-                          className={`px-6 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${canSaveCode ? 'bg-[#0E6B75] text-white hover:scale-105 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
-                        >
-                          <Save className="w-4 h-4" />
-                          <span className="text-xs font-black uppercase tracking-widest">Save</span>
-                        </button>
-                      </div>
-                      <div className="mt-2 px-1">
-                        {!isCodeValid && newCode.length > 0 && (
-                          <p className="text-[0.65rem] text-red-500 font-bold uppercase tracking-tight">Code must be at least 4 characters</p>
-                        )}
-                        {isCodeValid && !isCodeChanged && isDirty && (
-                          <p className="text-[0.65rem] text-[#0E6B75] font-bold uppercase tracking-tight">Current code is already {normalizedActiveCode}</p>
-                        )}
-                      </div>
+            {/* Couple dashboard shell */}
+            <div className="relative flex flex-1 min-h-0 w-full flex-col md:flex-row">
+              {/* Mobile top bar with sidebar toggle */}
+              <div className="md:hidden relative flex items-center gap-2 px-4 py-3 bg-[#0B171C] shrink-0">
+                <button onClick={() => setMobileAdminNavOpen(true)} className="p-2 rounded-xl bg-white/10 text-white active:bg-white/20" aria-label="Open menu">
+                  <Menu className="w-5 h-5" />
+                </button>
+                <p className="font-display text-white text-base font-medium">Dara &amp; Femi</p>
+                <div className="relative ml-auto">
+                  <button onClick={() => setProfileMenuOpen((v) => !v)} className="w-8 h-8 rounded-full bg-[#0E6B75] text-white grid place-items-center font-black text-[0.8rem]" aria-label="Profile">{(currentUserEmail || 'A').charAt(0).toUpperCase()}</button>
+                  {profileMenuOpen && (
+                    <div className={`absolute right-0 top-10 w-56 rounded-2xl border p-2 shadow-2xl z-[130] ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                      <p className="px-3 py-2 text-[0.72rem] opacity-60 break-all">{currentUserEmail}</p>
+                      <button onClick={handleAdminSignOut} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-[0.85rem] font-bold text-left text-[#C4453B] hover:bg-[#C4453B]/10">
+                        <LogOut className="w-4 h-4" />
+                        <span>Sign out</span>
+                      </button>
                     </div>
                   )}
+                </div>
+                <button onClick={onClose} className="shrink-0 p-2 rounded-full bg-white/10 text-white" aria-label="Close dashboard"><X className="w-4 h-4" /></button>
 
+              </div>
+
+                {/* Slide-in sidebar (mobile) */}
+                {mobileAdminNavOpen && (
+                  <div className="absolute inset-0 z-[120] flex" onClick={() => setMobileAdminNavOpen(false)}>
+                    <div className="absolute inset-0 bg-black/50" />
+                    <div
+                      className="relative w-[264px] max-w-[80vw] h-full bg-[#0B171C] text-white p-5 overflow-y-auto shadow-2xl"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="mb-6">
+                        <p className="font-display text-[1.25rem] font-medium">Dara &amp; Femi</p>
+                        <p className="text-[0.66rem] uppercase tracking-widest text-white/40 font-black mt-0.5">Couple dashboard</p>
+                      </div>
+                      <nav className="flex flex-col gap-1">
+                        {[
+                          { id: 'overview', label: 'Overview', icon: Home },
+                          { id: 'moderation', label: 'Moderation', icon: ShieldCheck, badge: modTotal },
+                          { id: 'posts', label: 'All posts', icon: Film },
+                          { id: 'events', label: 'Events & details', icon: Calendar },
+                          { id: 'hero', label: 'Hero photos', icon: ImageIcon },
+                          { id: 'albums', label: 'Photo albums', icon: Images },
+                          { id: 'settings', label: 'Settings', icon: Settings },
+                        ].filter((t: any) => !restrictedRole || t.id === 'albums').map((tab) => (
+                          <button
+                            key={tab.id}
+                            onClick={() => { setActiveAdminTab(tab.id); setMobileAdminNavOpen(false); }}
+                            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-left transition-all ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white shadow-lg' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+                          >
+                            <tab.icon className="w-[18px] h-[18px] shrink-0" />
+                            <span>{tab.label}</span>
+                      {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
+                            {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
+                          </button>
+                        ))}
+                      </nav>
+                      <p className="mt-5 mb-1 px-3 text-[0.62rem] uppercase tracking-widest text-white/30 font-black">More</p>
+                      <nav className="flex flex-col gap-1">
+                        {[
+                          { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper && !restrictedRole },
+                          
+                          { id: 'recycle', label: 'Bin', icon: Trash, show: !restrictedRole && (adminPermissions ? adminPermissions.canDeletePosts : true) },
+                        ].filter((t) => t.show).map((tab) => (
+                          <button
+                            key={tab.id}
+                            onClick={() => { setActiveAdminTab(tab.id); setMobileAdminNavOpen(false); }}
+                            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-left transition-all ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white shadow-lg' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+                          >
+                            <tab.icon className="w-[18px] h-[18px] shrink-0" />
+                            <span>{tab.label}</span>
+                      {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
+                            {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
+                          </button>
+                        ))}
+                      </nav>
+                      <button onClick={onClose} className="mt-6 pt-4 flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-white/60 hover:bg-white/10 hover:text-white text-left border-t border-white/10">
+                        <Globe className="w-[18px] h-[18px] shrink-0" />
+                        <span>View website</span>
+                      </button>
+                    </div>
+                  </div>
+
+                )}
+              {/* Sidebar (desktop) */}
+              <aside className="hidden md:flex flex-col w-[250px] shrink-0 bg-[#0B171C] text-white p-5 overflow-y-auto">
+                <div className="mb-6 flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-display text-[1.25rem] font-medium">Dara &amp; Femi</p>
+                    <p className="text-[0.66rem] uppercase tracking-widest text-white/40 font-black mt-0.5">Couple dashboard</p>
+                  </div>
+                  <div className="relative shrink-0">
+                    <button onClick={() => setProfileMenuOpen((v) => !v)} className="w-9 h-9 rounded-full bg-[#0E6B75] text-white grid place-items-center font-black" aria-label="Profile">{(currentUserEmail || 'A').charAt(0).toUpperCase()}</button>
+                    {profileMenuOpen && (
+                      <div className={`absolute right-0 top-11 w-56 rounded-2xl border p-2 shadow-2xl z-[130] ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                        <p className="px-3 py-2 text-[0.72rem] opacity-60 break-all">{currentUserEmail}</p>
+                        <button onClick={handleAdminSignOut} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-[0.85rem] font-bold text-left text-[#C4453B] hover:bg-[#C4453B]/10">
+                          <LogOut className="w-4 h-4" />
+                          <span>Sign out</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <nav className="flex flex-col gap-1">
+                  {[
+                    { id: 'overview', label: 'Overview', icon: Home },
+                    { id: 'moderation', label: 'Moderation', icon: ShieldCheck, badge: modTotal },
+                    { id: 'posts', label: 'All posts', icon: Film },
+                    { id: 'events', label: 'Events & details', icon: Calendar },
+                    { id: 'hero', label: 'Hero photos', icon: ImageIcon },
+                    { id: 'albums', label: 'Photo albums', icon: Images },
+                    { id: 'settings', label: 'Settings', icon: Settings },
+                  ].filter((t: any) => !restrictedRole || t.id === 'albums').map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveAdminTab(tab.id)}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-left transition-all ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white shadow-lg' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+                    >
+                      <tab.icon className="w-[18px] h-[18px] shrink-0" />
+                      <span>{tab.label}</span>
+                      {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
+                    </button>
+                  ))}
+                </nav>
+                <p className="mt-5 mb-1 px-3 text-[0.62rem] uppercase tracking-widest text-white/30 font-black">More</p>
+                <nav className="flex flex-col gap-1">
+                  {[
+                    { id: 'ads', label: 'Ads', icon: Megaphone, show: isSuper && !restrictedRole },
+                    
+                    { id: 'recycle', label: 'Bin', icon: Trash, show: !restrictedRole && (adminPermissions ? adminPermissions.canDeletePosts : true) },
+                  ].filter((t) => t.show).map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveAdminTab(tab.id)}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-left transition-all ${activeAdminTab === tab.id ? 'bg-[#0E6B75] text-white shadow-lg' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+                    >
+                      <tab.icon className="w-[18px] h-[18px] shrink-0" />
+                      <span>{tab.label}</span>
+                      {(tab as any).badge ? (<span className="ml-auto px-2 py-0.5 rounded-full bg-[#C8932A] text-white text-[0.6rem] font-black">{(tab as any).badge}</span>) : null}
+                    </button>
+                  ))}
+                </nav>
+                <button onClick={onClose} className="mt-auto pt-4 flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.9rem] font-bold text-white/60 hover:bg-white/10 hover:text-white text-left">
+                  <Globe className="w-[18px] h-[18px] shrink-0" />
+                  <span>View website</span>
+                </button>
+              </aside>
+
+              {/* Modal Body */}
+              <div className="flex-1 overflow-y-auto overscroll-contain p-6 md:p-8 pt-6">
+              <TabErrorBoundary label={activeAdminTab} isDarkMode={isDarkMode}>
+              {activeAdminTab === 'overview' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">{greeting}, Dara &amp; Femi</h2>
+                    <p className="text-sm opacity-60 mt-0.5">{daysToWedding} days to the wedding. Here is what needs you.</p>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {(() => {
+                      const reelCount = posts.filter((p: any) => postTypeOf(p) === 'Reel').length;
+                      const commentTotal = posts.reduce((s: number, p: any) => s + (p.commentCount || 0), 0);
+                      const authors = new Set(posts.map((p: any) => (p.authorName || '').trim()).filter(Boolean));
+                      const stats: [string, number][] = [
+                        ['Posts', posts.length],
+                        ['Reels', reelCount],
+                        ['Comments', commentTotal],
+                        ['Guests joined', authors.size],
+                      ];
+                      return stats.map(([label, value]) => (
+                        <div key={label} className={`rounded-[20px] p-4 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                          <b className="block text-2xl font-black font-display">{value}</b>
+                          <span className="block text-[0.68rem] font-black uppercase tracking-widest opacity-60 mt-1">{label}</span>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Needs your attention</h3>
+                    <div className="space-y-3">
+                      {([['pending', pendCount, 'post waiting for approval', 'posts waiting for approval'], ['reports', reportCount, 'reported item', 'reported items'], ['vendors', vendorRequests.length, 'vendor request', 'vendor requests']] as [string, number, string, string][]).map(([q, n, one, many]) => (
+                        <div key={q} className="flex items-center justify-between gap-3">
+                          <div><b>{n}</b> {n === 1 ? one : many}</div>
+                          <button onClick={() => { setActiveAdminTab('moderation'); setModQueue(q as 'pending' | 'reports' | 'vendors'); }} className={`px-4 py-2 rounded-full text-[0.7rem] font-black uppercase tracking-widest ${n ? 'bg-[#0E6B75] text-white' : 'border border-[#DAD8E3] opacity-60'}`}>{n ? 'Review' : 'All clear'}</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Posts in the last 14 days</h3>
+                    <div className="flex items-end gap-1 h-28">
+                      {(() => {
+                        const buckets = new Array(14).fill(0);
+                        const today = new Date(); today.setHours(0, 0, 0, 0);
+                        posts.forEach((p: any) => {
+                          const t = p.timestamp?.toDate ? p.timestamp.toDate() : (p.createdAt?.toDate ? p.createdAt.toDate() : null);
+                          if (!t) return;
+                          const d = new Date(t); d.setHours(0, 0, 0, 0);
+                          const diff = Math.floor((today.getTime() - d.getTime()) / 86400000);
+                          if (diff >= 0 && diff < 14) buckets[13 - diff]++;
+                        });
+                        const max = Math.max(1, ...buckets);
+                        return buckets.map((v, i) => (
+                          <div key={i} className="flex-1 bg-[#0E6B75]/25 rounded-t-md" style={{ height: `${Math.max(4, (v / max) * 100)}%` }} title={`${v} ${v === 1 ? 'post' : 'posts'}`} />
+                        ));
+                      })()}
+                    </div>
+                    <small className="block mt-2 opacity-50">Activity picks up as the wedding gets closer.</small>
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-3">Latest activity</h3>
+                    <div className="space-y-3">
+                      {posts.slice(0, 4).map((p: any) => (
+                        <div key={p.id} className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                          <div className="min-w-0">
+                            <p className="font-bold text-[0.92rem] truncate">{p.authorName || 'A guest'} shared a memory</p>
+                            <small className="block opacity-50 truncate">{p.text || p.caption || ''}</small>
+                          </div>
+                        </div>
+                      ))}
+                      {posts.length === 0 && <p className="opacity-50 text-sm">No memories yet. Guest posts will show up here the moment they land.</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeAdminTab === 'moderation' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">Moderation</h2>
+                    <p className="text-sm opacity-60 mt-0.5">Approve, reject and handle reports.</p>
+                  </div>
+                  <div className={`flex p-1 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#EEEDF3] border-[#DAD8E3]'}`}>
+                    {([['pending', `Posts (${pendCount})`], ['reports', `Reports (${reportCount})`], ['vendors', `Vendor requests (${vendorRequests.length})`]] as [string, string][]).map(([q, label]) => (
+                      <button key={q} onClick={() => setModQueue(q as 'pending' | 'reports' | 'vendors')} className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${modQueue === q ? 'bg-[#0E6B75] text-white shadow-sm' : 'opacity-60 hover:opacity-100'}`}>{label}</button>
+                    ))}
+                  </div>
+                  {modQueue === 'pending' && (
+                    pendCount === 0 ? (
+                      <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                        <p className="opacity-50 text-sm">Nothing waiting. New guest posts will appear here when approval is on.</p>
+                      </div>
+                    ) : (
+                      <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                        {posts.filter((p: any) => p.pending).map((p: any) => (
+                          <div key={p.id} className="flex items-center gap-3 p-4">
+                            <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-[0.92rem] truncate">{p.authorName || 'A guest'}</p>
+                              <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'}</small>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              <button onClick={async () => { try { await updateDoc(doc(db, 'posts', p.id), { pending: false }); showToast('Approved. Dara and Femi\u2019s guests can now see it', 'success'); } catch (err) { console.error(err); showToast('Could not approve the post.', 'error'); } }} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest">Approve</button>
+                              <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Reject</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                  {modQueue === 'reports' && (
+                    reportCount === 0 ? (
+                      <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                        <p className="opacity-50 text-sm">No reports. Guests can report a problem from their Settings screen.</p>
+                      </div>
+                    ) : (
+                      <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                        {posts.filter((p: any) => ((p as any).reports || 0) > 0).map((p: any) => (
+                          <div key={p.id} className="flex items-center gap-3 p-4">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-[0.92rem] truncate">Reported by a guest</p>
+                              <small className="block opacity-50 truncate">Post by {p.authorName || 'a guest'} · {p.text || p.caption || ''}</small>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              <button onClick={() => handleDismissReport(p.id)} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Dismiss</button>
+                              <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest">Remove post</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                  {modQueue === 'vendors' && (
+                    vendorRequests.length === 0 ? (
+                      <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                        <p className="opacity-50 text-sm">No pending vendor requests. A guest asks by turning on &ldquo;I&rsquo;m an official vendor&rdquo; in their Settings.</p>
+                      </div>
+                    ) : (
+                      <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                        {vendorRequests.map((v: any) => (
+                          <div key={v.uid} className="flex items-center gap-3 p-4">
+                            <div className="w-11 h-11 rounded-2xl bg-[#C8932A]/15 text-[#C8932A] flex items-center justify-center font-black shrink-0">{(v.displayName || 'V').charAt(0).toUpperCase()}</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-[0.92rem] truncate">{v.displayName || 'A guest'}</p>
+                              <small className="block opacity-50 truncate">{v.vendorRequest?.why || 'Wants to post as an official vendor'}</small>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              <button onClick={() => onVendorAction(v.uid, v.displayName || 'A guest', true)} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest">Approve as vendor</button>
+                              <button onClick={() => onVendorAction(v.uid, v.displayName || 'A guest', false)} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Decline</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+
+              {activeAdminTab === 'posts' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">All posts</h2>
+                    <p className="text-sm opacity-60 mt-0.5">{posts.length} {posts.length === 1 ? 'memory' : 'memories'} shared by your people.</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <select value={postEventFilter} onChange={(e) => setPostEventFilter(e.target.value)} aria-label="Filter by event" className={`p-3 rounded-xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] text-white' : 'bg-white border-[#DAD8E3] text-[#14262D]'} font-bold text-sm`}>
+                      <option value="all">All events</option>
+                      {(events || []).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                    </select>
+                    <select value={postTypeFilter} onChange={(e) => setPostTypeFilter(e.target.value)} aria-label="Filter by type" className={`p-3 rounded-xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] text-white' : 'bg-white border-[#DAD8E3] text-[#14262D]'} font-bold text-sm`}>
+                      {['all', 'Photo', 'Video', 'Reel', 'Wish'].map((t) => <option key={t} value={t}>{t === 'all' ? 'All types' : t}</option>)}
+                    </select>
+                  </div>
+                  <div className={`rounded-[20px] border divide-y ${isDarkMode ? 'bg-[#0B171C] border-[#22363E] divide-[#22363E]' : 'bg-white border-[#DAD8E3] divide-[#DAD8E3]/70'}`}>
+                    {(() => {
+                      const filtered = posts.filter((p: any) => (postEventFilter === 'all' || p.eventId === postEventFilter) && (postTypeFilter === 'all' || postTypeOf(p) === postTypeFilter));
+                      if (filtered.length === 0) return <p className="p-5 opacity-50 text-sm">No posts match. Memories your guests share will show up here.</p>;
+                      // How many posts each person has made, shown next to their
+                      // name on every row so the couple sees a guest's history.
+                      const postCountByKey: Record<string, number> = {};
+                      posts.forEach((q: any) => {
+                        const k = q.authorUid || `name:${(q.authorName || '').trim().toLowerCase()}`;
+                        postCountByKey[k] = (postCountByKey[k] || 0) + 1;
+                      });
+                      return filtered.map((p: any) => {
+                        const t = postTypeOf(p);
+                        const authorKey = p.authorUid || `name:${(p.authorName || '').trim().toLowerCase()}`;
+                        const evName = (events || []).find((e) => e.id === p.eventId)?.name;
+                        const when = p.timestamp?.toDate ? p.timestamp.toDate() : (p.createdAt?.toDate ? p.createdAt.toDate() : null);
+                        const media = (p.mediaUrls || [])[0];
+                        return (
+                          <div key={p.id} className="flex items-center gap-3 p-4">
+                            {/* Small preview: tap to watch a video or view the photo full-screen. */}
+                            {(() => {
+                              const urls = Array.isArray(p.mediaUrls) ? p.mediaUrls : (p.mediaUrl ? [p.mediaUrl] : []);
+                              const isVid = urls.length > 0 && (p.mediaTypes?.[0] === 'video' || urls[0].toLowerCase().includes('.mp4') || urls[0].toLowerCase().includes('.webm') || urls[0].toLowerCase().includes('.mov') || urls[0].includes('/video/'));
+                              return urls.length ? (
+                                <button type="button" onClick={() => setAdminViewerPost(p)} className="relative w-14 h-14 rounded-2xl overflow-hidden bg-black shrink-0 border border-[#DAD8E3] dark:border-[#22363E]" title="Open preview">
+                                  {isVid ? (
+                                    <>
+                                      <video src={urls[0]} className="w-full h-full object-cover" muted playsInline />
+                                      <span className="absolute inset-0 grid place-items-center bg-black/30"><Play className="w-5 h-5 text-white fill-current" /></span>
+                                    </>
+                                  ) : (
+                                    <img src={urls[0]} className="w-full h-full object-cover" alt="" />
+                                  )}
+                                </button>
+                              ) : (
+                                <div className="w-11 h-11 rounded-2xl bg-[#0E6B75]/15 text-[#0E6B75] flex items-center justify-center font-black shrink-0">{(p.authorName || 'G').charAt(0).toUpperCase()}</div>
+                              );
+                            })()}
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-[0.92rem] truncate">
+                                {p.authorName || 'A guest'}
+                                <span className="ml-2 px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[0.6rem] font-black uppercase tracking-widest opacity-70">{t}</span>
+                                {evName && <span className="ml-1.5 px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[0.6rem] font-black uppercase tracking-widest opacity-70">{evName}</span>}
+                                {(postCountByKey[authorKey] || 1) > 1 && <span className="ml-1.5 px-2 py-0.5 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] dark:text-[#4FC3CF] text-[0.6rem] font-black uppercase tracking-widest shrink-0">{postCountByKey[authorKey]} posts</span>}
+                              </p>
+                              <small className="block opacity-50 truncate">{p.text || p.caption || 'Shared a memory'}</small>
+                              <small className="block opacity-40">{(p.likeCount || 0) + (p.loveCount || 0)} likes · {p.commentCount || 0} comments · {relTime(when)}</small>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              {media && (
+                                <button onClick={() => adminDownloadMedia(p)} className="px-4 py-2 rounded-full border border-[#DAD8E3] text-[0.7rem] font-black uppercase tracking-widest">Download</button>
+                              )}
+                              {(adminPermissions ? adminPermissions.canDeletePosts : true) && (
+                                <button onClick={() => onDeletePost(p.id)} className="px-4 py-2 rounded-full border border-red-500/30 text-red-500 text-[0.7rem] font-black uppercase tracking-widest">Remove</button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {activeAdminTab === 'events' && (
+                <div className="space-y-6">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <h2 className="text-2xl font-black font-display tracking-tight">Events &amp; details</h2>
+                      <p className="text-sm opacity-60 mt-0.5">Set each event to Done, Next up or Upcoming. Guests see this on the Home timeline.</p>
+                    </div>
+                    {/* Saves everything, then opens the live website in a new tab. */}
+                    <button onClick={previewSite} disabled={weddingBusy} title="Saves your changes, then opens the website in a new tab" className={`px-5 py-3 rounded-full text-[0.7rem] font-black uppercase tracking-widest bg-[#0E6B75] text-white ${weddingBusy ? 'opacity-60' : ''}`}>
+                      {weddingBusy ? 'Saving…' : 'Preview site'}
+                    </button>
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <h3 className="font-black font-display text-lg">Our story</h3>
+                      <button onClick={saveStory} disabled={weddingBusy} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest disabled:opacity-60 shrink-0">{weddingBusy ? 'Saving…' : 'Save'}</button>
+                    </div>
+                    <textarea value={storyDraft} onChange={(e) => setStoryDraft(e.target.value)} rows={4} placeholder="How you met, in your own words." className={`w-full p-4 rounded-xl border-none outline-none text-sm leading-relaxed resize-y ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`} />
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <h3 className="font-black font-display text-lg">Wedding day details</h3>
+                      <button onClick={saveDetails} disabled={weddingBusy} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest disabled:opacity-60 shrink-0">{weddingBusy ? 'Saving…' : 'Save'}</button>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      {([['churchTime', 'Church time'], ['churchVenue', 'Church venue'], ['receptionTime', 'Reception time'], ['receptionVenue', 'Reception venue'], ['asoEbi', 'Aso-ebi'], ['hashtag', 'Hashtag']] as [string, string][]).map(([k, label]) => (
+                        <label key={k} className="block">
+                          <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">{label}</span>
+                          <input value={detDraft?.[k] || ''} onChange={(e) => setDetDraft({ ...(detDraft || {}), [k]: e.target.value })} className={inputCls} />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="font-black font-display text-lg mb-3">The journey</h3>
+                    <div className="space-y-4">
+                      {evDraft.map((e, i) => (
+                        <div key={e.id} className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                          <div className="grid sm:grid-cols-2 gap-3">
+                            <label className="block">
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Event</span>
+                              <input value={e.name} onChange={(ev) => setEvDraft(evDraft.map((x, xi) => xi === i ? { ...x, name: ev.target.value } : x))} className={inputCls} />
+                            </label>
+                            <label className="block">
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Date</span>
+                              <input type="date" value={e.date} onChange={(ev) => setEvDraft(evDraft.map((x, xi) => xi === i ? { ...x, date: ev.target.value } : x))} className={inputCls} />
+                            </label>
+                            <label className="block">
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Venue</span>
+                              <input value={e.venue || ''} onChange={(ev) => setEvDraft(evDraft.map((x, xi) => xi === i ? { ...x, venue: ev.target.value } : x))} className={inputCls} />
+                            </label>
+                            <label className="block">
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Short description</span>
+                              <input value={e.desc} onChange={(ev) => setEvDraft(evDraft.map((x, xi) => xi === i ? { ...x, desc: ev.target.value } : x))} className={inputCls} />
+                            </label>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                              <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Status shown to guests</span>
+                              <div className="flex rounded-full border border-[#DAD8E3] dark:border-[#22363E] overflow-hidden">
+                                {(['done', 'next', 'up'] as const).map((s) => (
+                                  <button key={s} type="button" onClick={() => setEvDraft(evDraft.map((x) => x.id === e.id ? { ...x, status: s } : (s === 'next' && x.status === 'next' ? { ...x, status: 'up' } : x)))} className={`px-4 py-2 text-[0.65rem] font-black uppercase tracking-widest ${e.status === s || (!e.status && s === 'up') ? 'bg-[#0E6B75] text-white' : 'opacity-60'}`}>
+                                    {s === 'done' ? 'Done' : s === 'next' ? 'Next up' : 'Upcoming'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={saveEvents} disabled={weddingBusy} className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest disabled:opacity-60">{weddingBusy ? '…' : 'Save'}</button>
+                              {i > 0 && (
+                                <button type="button" onClick={() => { const u = [...evDraft]; const t = u[i - 1]; u[i - 1] = u[i]; u[i] = t; setEvDraft(u); }} className="px-4 py-2 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.65rem] font-black uppercase tracking-widest">Move up</button>
+                              )}
+                              <button type="button" onClick={() => setEvDraft(evDraft.filter((_, xi) => xi !== i))} className="px-4 py-2 rounded-full border border-[#C4453B]/40 text-[#C4453B] text-[0.65rem] font-black uppercase tracking-widest">Delete</button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button type="button" onClick={() => setEvDraft([...evDraft, { id: `ev${Date.now()}`, name: '', type: '', date: '', venue: '', desc: '', status: 'up' } as WeddingEvent])} className="mt-4 px-5 py-3 rounded-full border border-dashed border-[#0E6B75] text-[#0E6B75] text-[0.7rem] font-black uppercase tracking-widest">+ Add event</button>
+                  </div>
+                </div>
+              )}
+
+              {activeAdminTab === 'hero' && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-2xl font-black font-display tracking-tight">Hero photos</h2>
+                    <p className="text-sm opacity-60 mt-0.5">Photos that float across the top of the Home screen, and the giant footer grid.</p>
+                  </div>
+                  <div className="space-y-6">
                   {adminPermissions?.canUploadImages && (
                     <div>
                       <div className="flex items-center justify-between mb-3">
                         <label className="block text-[0.7rem] uppercase tracking-widest font-black opacity-50">
-                          Hero Section Images ({heroImages.length} / 14)
+                          Hero photos ({heroShown.length} / 14)
                         </label>
-                        {heroImages.length > 0 && (
+                        {heroShown.length > 0 && (
                           <button
                             type="button"
                             onClick={() => onUpdateHeroImages([])}
@@ -3618,24 +5437,43 @@ function AdminDashboardModal({
                           </button>
                         )}
                       </div>
+                      {/* Label attached to every photo added from the tile below. */}
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <span className="text-[10px] font-black uppercase tracking-widest opacity-50">Label for new photos</span>
+                        <select value={newHeroLabel} onChange={(e) => setNewHeroLabel(e.target.value)} className="p-2 rounded-lg border border-[#DAD8E3] dark:border-[#22363E] bg-transparent text-xs font-bold">
+                          <option value="">No label</option>
+                          {(events || []).map((ev: any) => <option key={ev.id} value={ev.name}>{ev.name}</option>)}
+                        </select>
+                      </div>
                       <div className="grid grid-cols-4 gap-2 mb-4">
-                        {heroImages.slice(0, 14).map((img: string, idx: number) => (
+                        {heroShown.slice(0, 14).map((img: string, idx: number) => (
                           <div key={idx} className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 border dark:border-[#22363E] group">
                             <img src={img} className="w-full h-full object-cover" alt="" />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const updated = heroImages.filter((_: string, i: number) => i !== idx);
-                                onUpdateHeroImages(updated);
-                              }}
-                              className="absolute top-1 right-1 p-1 bg-black/70 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                              title="Remove image"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
+                            <div className="absolute top-1 right-1 flex gap-1">
+                              {idx > 0 && (
+                                <button type="button" onClick={() => { const u = [...heroShown]; const t = u[idx - 1]; u[idx - 1] = u[idx]; u[idx] = t; onUpdateHeroImages(u); }} className="p-1 bg-black/70 text-white rounded-full" title="Move earlier">
+                                  <ChevronLeft className="w-3 h-3" />
+                                </button>
+                              )}
+                              {idx < heroShown.length - 1 && (
+                                <button type="button" onClick={() => { const u = [...heroShown]; const t = u[idx + 1]; u[idx + 1] = u[idx]; u[idx] = t; onUpdateHeroImages(u); }} className="p-1 bg-black/70 text-white rounded-full" title="Move later">
+                                  <ChevronRight className="w-3 h-3" />
+                                </button>
+                              )}
+                              <button type="button" onClick={() => onUpdateHeroImages(heroShown.filter((_: string, i: number) => i !== idx))} className="p-1 bg-black/70 text-white rounded-full" title="Remove image">
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                            {/* Event label attached to this photo, editable any time. */}
+                            <div className="absolute bottom-0 inset-x-0 p-1 bg-black/55">
+                              <select value={heroImageLabels?.[img] || ''} onChange={(e) => onUpdateHeroLabels({ ...(heroImageLabels || {}), [img]: e.target.value })} className="w-full bg-transparent text-white text-[9px] font-bold outline-none" title="Photo label">
+                                <option value="" className="text-black">No label</option>
+                                {(events || []).map((ev: any) => <option key={ev.id} value={ev.name} className="text-black">{ev.name}</option>)}
+                              </select>
+                            </div>
                           </div>
                         ))}
-                        {heroImages.length < 14 && (
+                        {heroShown.length < 14 && (
                           <label className="aspect-square rounded-lg border-2 border-dashed border-[#0E6B75]/30 flex flex-col items-center justify-center cursor-pointer hover:bg-[#0E6B75]/5 transition-colors">
                             <input 
                               type="file" 
@@ -3647,7 +5485,7 @@ function AdminDashboardModal({
                                 const files = Array.from(e.target.files || []);
                                 if (files.length === 0) return;
 
-                                const remainingSlots = 14 - heroImages.length;
+                                const remainingSlots = 14 - heroShown.length;
                                 const filesToUpload = files.slice(0, remainingSlots);
                                 if (files.length > remainingSlots) {
                                   showToast(`Maximum 14 hero images allowed. Uploading first ${remainingSlots}.`, 'info');
@@ -3664,7 +5502,13 @@ function AdminDashboardModal({
                                   }
                                   
                                   if (uploadedUrls.length > 0) {
-                                    onUpdateHeroImages([...heroImages, ...uploadedUrls].slice(0, 14));
+                                    onUpdateHeroImages([...heroShown, ...uploadedUrls].slice(0, 14));
+                                    // Attach the chosen label to every newly added photo.
+                                    if (newHeroLabel) {
+                                      const labelMap = { ...(heroImageLabels || {}) };
+                                      uploadedUrls.forEach((u) => { labelMap[u] = newHeroLabel; });
+                                      onUpdateHeroLabels(labelMap);
+                                    }
                                   }
                                 } catch (err: any) {
                                   console.error("Bulk upload error:", err);
@@ -3679,150 +5523,312 @@ function AdminDashboardModal({
                               <RefreshCw className="w-5 h-5 text-[#0E6B75] animate-spin" />
                             ) : (
                               <>
-                                <ImageIcon className="w-5 h-5 text-[#0E6B75]" />
-                                <span className="text-[10px] font-bold mt-1 uppercase">Add ({14 - heroImages.length})</span>
+                                <Plus className="w-5 h-5 text-[#0E6B75]" />
+                                <span className="text-[10px] font-bold mt-1 uppercase">Add ({14 - heroShown.length})</span>
                               </>
                             )}
                           </label>
                         )}
                       </div>
-                      <p className="text-[0.75rem] opacity-60 italic">Upload up to 14 images for the hero banner (scrolls 2 images at a time).</p>
+                      <p className="text-[0.75rem] opacity-60 italic">Upload up to 14 images for the hero banner (scrolls 2 images at a time).{!heroImages.length && ' These are the placeholder photos currently on the website: remove any of them or add your own, and your list takes over the hero.'}</p>
                     </div>
                   )}
 
-                  {isSuper && (
-                    <div className="space-y-6 pt-4 border-t border-black/5 dark:border-white/5">
-                      <div className="bg-[#0E6B75]/5 p-4 rounded-[20px] border border-[#0E6B75]/10">
-                        <div className="flex items-center gap-2 mb-4">
-                          < ShieldCheck className="w-4 h-4 text-[#0E6B75]" />
-                          <h4 className="text-[0.7rem] uppercase tracking-widest font-black text-[#0E6B75]">Super Admin Controls</h4>
-                        </div>
-                        
-                        <div className="space-y-6">
-                          <div>
-                            <label className="block text-[0.65rem] uppercase tracking-widest font-black mb-2 opacity-50">Main Estate Website URL</label>
-                            <div className="flex gap-2">
-                              <input 
-                                type="url"
-                                value={newUrl}
-                                onChange={(e) => {
-                                  setNewUrl(e.target.value);
-                                  setIsDirty(true);
-                                }}
-                                className={`flex-1 p-3.5 rounded-xl border-none outline-none font-medium transition-colors text-sm ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
-                                placeholder="https://..."
-                              />
-                              <button 
-                                onClick={async () => {
-                                  await onUpdateEstateUrl(newUrl);
-                                  setIsDirty(false);
-                                }}
-                                className="px-5 bg-[#0E6B75] text-white rounded-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap"
-                              >
-                                <Check className="w-4 h-4" />
-                                <span className="text-[10px] font-black uppercase tracking-widest">Save</span>
-                              </button>
-                            </div>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <a
-                                href={newUrl || estateWebsiteUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={`flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest transition-all ${
-                                  isDarkMode
-                                    ? 'border-[#22363E] bg-[#0B171C] text-[#4FC3CF] hover:bg-[#22363E]'
-                                    : 'border-[#DAD8E3] bg-white text-[#0E6B75] hover:bg-[#EEEDF3]'
-                                }`}
-                              >
-                                <ExternalLink className="w-4 h-4" />
-                                Open Main Website
-                              </a>
-                              {onBackToMain && (
-                                <button
-                                  onClick={() => {
-                                    onClose();
-                                    onBackToMain();
-                                  }}
-                                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#0E6B75] text-white text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all"
-                                >
-                                  <Home className="w-4 h-4" />
-                                  View Legacy Site
-                                </button>
-                              )}
-                            </div>
-
-                            <div className="mt-3">
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  try {
-                                    const res = await fetch('/api/download-env');
-                                    if (!res.ok) throw new Error('Failed to fetch env file');
-                                    const text = await res.text();
-                                    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-                                    const url = window.URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = '.env';
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    document.body.removeChild(a);
-                                    window.URL.revokeObjectURL(url);
-                                    showToast('Downloaded .env file!');
-                                  } catch {
-                                    showToast('Could not download .env file.', 'error');
-                                  }
-                                }}
-                                className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#C9A24B] text-[#14262D] text-xs font-black uppercase tracking-widest hover:opacity-95 transition-all shadow-sm"
-                              >
-                                <Download className="w-4 h-4" />
-                                Download Netlify .env File
-                              </button>
-                            </div>
+                  {adminPermissions?.canUploadImages && (
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="block text-[0.7rem] uppercase tracking-widest font-black opacity-50">
+                          Giant Footer Images ({footerImages.length} / 24)
+                        </label>
+                        {footerImages.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => onUpdateFooterImages([])}
+                            className="text-[10px] font-black uppercase tracking-wider text-red-500 hover:underline"
+                          >
+                            Clear All
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 mb-4">
+                        {footerImages.slice(0, 24).map((img: string, idx: number) => (
+                          <div key={idx} className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 border dark:border-[#22363E] group">
+                            <img src={img} className="w-full h-full object-cover" alt="" />
+                            <button
+                              type="button"
+                              onClick={() => onUpdateFooterImages(footerImages.filter((_: string, i: number) => i !== idx))}
+                              className="absolute top-1 right-1 p-1 bg-black/70 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Remove image"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
                           </div>
+                        ))}
+                        {footerImages.length < 24 && (
+                          <label className="aspect-square rounded-lg border-2 border-dashed border-[#0E6B75]/30 flex flex-col items-center justify-center cursor-pointer hover:bg-[#0E6B75]/5 transition-colors">
+                            <input 
+                              type="file" 
+                              multiple 
+                              accept="image/*" 
+                              className="hidden" 
+                              disabled={isBulkUploading}
+                              onChange={async (e) => {
+                                const files = Array.from(e.target.files || []);
+                                if (files.length === 0) return;
 
-                          <div>
-                            <label className="block text-[0.65rem] uppercase tracking-widest font-black mb-3 opacity-50 tracking-normal">Three Decades Legacy (Programme Day Images 1-7)</label>
-                            <div className="grid grid-cols-4 gap-2">
-                              {DAYS_DATA.map((day, idx) => (
-                                <div key={idx} className="space-y-1">
-                                  <label className="relative aspect-square rounded-lg overflow-hidden bg-slate-100 border dark:border-[#22363E] flex flex-col items-center justify-center cursor-pointer group">
-                                    <input 
-                                      type="file" 
-                                      accept="image/*" 
-                                      className="hidden" 
-                                      onChange={async (e) => {
-                                        const file = e.target.files?.[0];
-                                        if (!file) return;
-                                        
-                                        showToast(`Uploading image for Day ${idx + 1}...`);
-                                        const url = await uploadToCloudinary(file as any, 'programme');
-                                        const newDayImages = [...dayImages];
-                                        newDayImages[idx] = url;
-                                        onUpdateDayImages(newDayImages);
-                                      }}
-                                    />
-                                    {dayImages[idx] ? (
-                                      <>
-                                        <img src={dayImages[idx]} className="w-full h-full object-cover group-hover:opacity-40 transition-opacity" alt="" />
-                                        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 flex items-center justify-center">
-                                          <RefreshCw className="w-5 h-5 text-white" />
-                                        </div>
-                                      </>
-                                    ) : (
-                                      <Plus className="w-5 h-5 text-[#0E6B75]/40" />
-                                    )}
-                                  </label>
-                                  <span className="block text-[8px] text-center font-black uppercase opacity-40">{day.l}</span>
+                                const remainingSlots = 24 - footerImages.length;
+                                const filesToUpload = files.slice(0, remainingSlots);
+                                if (files.length > remainingSlots) {
+                                  showToast(`Maximum 24 footer images allowed. Uploading first ${remainingSlots}.`, 'info');
+                                }
+                                
+                                setIsBulkUploading(true);
+                                const uploadedUrls: string[] = [];
+                                
+                                try {
+                                  for (const file of filesToUpload) {
+                                    const url = await uploadToCloudinary(file as any, 'programme');
+                                    uploadedUrls.push(url);
+                                    await new Promise(resolve => setTimeout(resolve, 100));
+                                  }
+                                  
+                                  if (uploadedUrls.length > 0) {
+                                    onUpdateFooterImages([...footerImages, ...uploadedUrls].slice(0, 24));
+                                  }
+                                } catch (err: any) {
+                                  console.error("Bulk upload error:", err);
+                                  showToast(err?.message || "Failed to upload footer images.", "error");
+                                } finally {
+                                  setIsBulkUploading(false);
+                                  e.target.value = '';
+                                }
+                              }}
+                            />
+                            {isBulkUploading ? (
+                              <RefreshCw className="w-5 h-5 text-[#0E6B75] animate-spin" />
+                            ) : (
+                              <>
+                                <ImageIcon className="w-5 h-5 text-[#0E6B75]" />
+                                <span className="text-[10px] font-bold mt-1 uppercase">Add ({24 - footerImages.length})</span>
+                              </>
+                            )}
+                          </label>
+                        )}
+                      </div>
+                      <p className="text-[0.75rem] opacity-60 italic">Upload up to 24 images for the giant footer photo grid (tapping a tile opens it full-screen).</p>
+                    </div>
+                  )}
+                  </div>
+                </div>
+              )}
+
+              {activeAdminTab === 'albums' && (
+                <div className="space-y-8">
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-1">Photo albums</h3>
+                    <p className="text-sm opacity-60">Photos and videos from the photographers and vendors, each stamped with the upload date and the name of who added it.</p>
+                  </div>
+                  {([['photo', 'Photos', 'Add photos', 'image/*'], ['video', 'Videos', 'Add videos', 'video/*']] as [string, string, string, string][]).map(([kind, label, btnLabel, accept]) => {
+                    const items = albums.filter((a: any) => a.mediaType === kind);
+                    return (
+                      <div key={kind}>
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                          <h4 className="text-[0.7rem] uppercase tracking-widest font-black opacity-50">{label}</h4>
+                          <label htmlFor={`album-${kind}-upload`} className={`px-4 py-2.5 rounded-xl text-[0.65rem] font-black uppercase tracking-widest cursor-pointer ${albumBusy ? 'bg-slate-200 text-slate-400 dark:bg-[#22363E] dark:text-[#5A6970]' : 'bg-[#0E6B75] text-white'}`}>
+                            {albumBusy ? 'Uploading…' : btnLabel}
+                          </label>
+                          <input id={`album-${kind}-upload`} type="file" accept={accept} multiple className="hidden" onChange={(e) => { const t = e.target; uploadAlbumMedia(t.files, kind as 'photo' | 'video'); t.value = ''; }} />
+                        </div>
+                        {items.length === 0 ? (
+                          <p className="text-xs opacity-40 py-8 text-center">Nothing here yet.</p>
+                        ) : (
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            {items.map((a: any) => (
+                              <div key={a.id} className={`rounded-2xl overflow-hidden border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                                <div className="aspect-[4/3] bg-black relative">
+                                  {a.mediaType === 'video' ? (
+                                    <video src={a.mediaUrl} className="w-full h-full object-cover" muted playsInline preload="metadata" />
+                                  ) : (
+                                    <img src={a.mediaUrl} className="w-full h-full object-cover" alt="Album media" loading="lazy" />
+                                  )}
+                                  {a.mediaType === 'video' && (
+                                    <span className="absolute inset-0 grid place-items-center pointer-events-none">
+                                      <span className="w-9 h-9 rounded-full bg-black/50 text-white grid place-items-center"><Play className="w-4 h-4 fill-current" /></span>
+                                    </span>
+                                  )}
                                 </div>
+                                <div className="p-3">
+                                  <p className="text-[0.6rem] uppercase tracking-widest opacity-50 mb-0.5">
+                                    {a.uploadedAt?.toDate ? new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(a.uploadedAt.toDate()) : 'Just added'}
+                                  </p>
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-xs font-bold truncate">By {a.uploaderName || a.uploaderEmail}</p>
+                                    {adminPermissions?.canDeletePosts && (
+                                      <button onClick={() => deleteAlbumMedia(a.id)} className="text-red-500 p-1 hover:bg-red-500/10 rounded-lg shrink-0" title="Remove">
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {activeAdminTab === 'settings' && (
+                <div className="space-y-8">
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-1">Guest access code</h3>
+                    <p className="text-sm opacity-60 mb-4">Guests enter this once before their first post. Anyone can browse without it.</p>
+                    <div className="flex items-center gap-3 flex-wrap mb-4">
+                      <b className="font-display text-2xl tracking-[0.2em]">{activeCode}</b>
+                      <button type="button" onClick={() => { navigator.clipboard?.writeText(activeCode || ''); showToast('Access code copied'); }} className="px-4 py-2 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.65rem] font-black uppercase tracking-widest">Copy</button>
+                    </div>
+                    {adminPermissions?.canSetAccessCode && (
+                      <div>
+                        <span className="block text-[0.65rem] font-black uppercase tracking-widest opacity-50 mb-1.5">Set your own code</span>
+                        <div className="flex gap-2 flex-wrap">
+                          <input type="text" value={newCode} maxLength={20} onChange={(e) => { const val = e.target.value.replace(/[^a-zA-Z0-9-]/g, '').toUpperCase(); setNewCode(val); setIsDirty(true); }} placeholder="E.G. DARAFEMI26" className={`${inputCls} flex-1 min-w-[200px] tracking-widest`} />
+                          <button onClick={async () => { await onUpdateCode(newCode); setIsDirty(false); }} disabled={!canSaveCode} className={`px-5 py-3 rounded-xl text-[0.7rem] font-black uppercase tracking-widest ${canSaveCode ? 'bg-[#0E6B75] text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>Save code</button>
+                                                  </div>
+                        <p className="text-[0.7rem] opacity-50 mt-2">4 to 16 letters or numbers. Changing it stops the old code working.</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-4">Behaviour</h3>
+                    <div className="space-y-4">
+                      {([['approve', 'Approve guest posts first', 'New guest posts stay hidden until you approve them. Vendors skip this.', approveGuestPosts], ['push', 'Push notifications', 'Get a notification on this device when someone posts or comments.', pushEnabled], ['archive', 'Archive mode after the wedding', 'Keeps every memory viewable for life but stops new posts and comments.', archiveMode]] as [string, string, string, boolean][]).map(([k, label, sub, on]) => (
+                        <div key={k} className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <b className="block text-[0.95rem]">{label}</b>
+                            <small className="block opacity-50 text-sm">{sub}</small>
+                          </div>
+                          <button type="button" aria-label={label} onClick={() => onUpdateAppFlags(k === 'approve' ? { approveGuestPosts: !on } : k === 'push' ? { pushEnabled: !on } : { archiveMode: !on }, `${label}: ${on ? 'off' : 'on'}.`)} className={`relative w-12 h-7 rounded-full transition-colors shrink-0 ${on ? 'bg-[#0E6B75]' : 'bg-black/20 dark:bg-white/20'}`}>
+                            <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-6' : 'left-1'}`} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Post action button: the admin picks Share or Download for the
+                      third button on every post and reel (app_config/main.feedActionMode). */}
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-1">Post action button</h3>
+                    <p className="text-sm opacity-60 mb-4">The third button on every post and reel. Share opens the share sheet; Download saves the photo or video straight to the guest's device.</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {([['share', 'Share button'], ['download', 'Download button']] as [string, string][]).map(([val, label]) => (
+                        <button key={val} type="button" onClick={() => { if (feedActionMode !== val) onUpdateAppFlags({ feedActionMode: val }, `Post action button: ${label}.`); }} className={`px-5 py-3 rounded-xl text-[0.7rem] font-black uppercase tracking-widest border transition-colors ${feedActionMode === val ? 'bg-[#0E6B75] text-white border-[#0E6B75]' : (isDarkMode ? 'border-[#22363E] text-[#93A4AB]' : 'border-[#DAD8E3] text-[#5A6970]')}`}>{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {isSuper && (
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-4">Administrators</h3>
+                    <div className="space-y-6">
+                      <div>
+                        <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Invite a team member</label>
+                        <div className="flex gap-2 flex-wrap mb-3">
+                          {([['couple', 'Couple'], ['photographer', 'Photographer'], ['vendor', 'Vendor']] as [string, string][]).map(([r, label]) => (
+                            <button key={r} type="button" onClick={() => setInviteRole(r)} className={`px-4 py-2.5 rounded-xl text-[0.7rem] font-black uppercase tracking-widest border transition-colors ${inviteRole === r ? 'bg-[#0E6B75] text-white border-[#0E6B75]' : (isDarkMode ? 'border-[#22363E] text-[#93A4AB]' : 'border-[#DAD8E3] text-[#5A6970]')}`}>{label}</button>
+                          ))}
+                        </div>
+                        <div className="flex gap-2">
+                          <input
+                            type="email"
+                            value={inviteEmail}
+                            onChange={(e) => setInviteEmail(e.target.value)}
+                            placeholder="name@email.com"
+                            className={`flex-1 p-4 rounded-xl border-none outline-none font-bold ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
+                          />
+                          <button onClick={inviteDashboardAccess} disabled={inviteBusy} className="px-6 rounded-xl bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest disabled:opacity-50">
+                            {inviteBusy ? 'Creating…' : 'Invite'}
+                          </button>
+                        </div>
+                        <p className="text-[0.7rem] opacity-50 mt-2">
+                          {inviteRole === 'couple'
+                            ? 'Couples get the full dashboard: every section and every action.'
+                            : 'Photographers and vendors can sign in and upload to Photo albums only. Everything they add carries their name and the upload date.'}
+                        </p>
+                      </div>
+                      {inviteResult && (
+                        <div className="p-4 rounded-xl bg-[#C8932A]/10 border border-[#C8932A]/30">
+                          <p className="text-sm font-bold">Share this temporary password now. It shows only once.</p>
+                          <div className="flex items-center gap-3 mt-2 flex-wrap">
+                            <code className="px-3 py-2 rounded-lg bg-black/10 font-black tracking-widest">{inviteResult.tempPassword}</code>
+                            <span className="text-sm opacity-70">for {inviteResult.email}</span>
+                            <button
+                              onClick={() => { navigator.clipboard?.writeText(inviteResult.tempPassword); showToast('Temporary password copied'); }}
+                              className="px-4 py-2 rounded-full bg-[#0E6B75] text-white text-[0.65rem] font-black uppercase tracking-widest"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      <div className="space-y-4">
+                        <h4 className="text-[0.7rem] uppercase tracking-widest font-black opacity-50">Current team</h4>
+                        {allAdmins.map((adm) => (
+                          <div key={adm.id} className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#F8F8FA] border-[#DAD8E3]'}`}>
+                            <div className="flex items-center justify-between mb-3 gap-2">
+                              <span className="font-bold text-sm break-all">{adm.email}</span>
+                              <button onClick={() => handleRemoveAdmin(adm.email)} className="text-red-500 p-1 hover:bg-red-500/10 rounded-lg shrink-0" title="Remove">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border ${adm.role === 'couple' || !adm.role ? 'bg-[#0E6B75] border-[#0E6B75] text-white' : 'bg-[#C8932A] border-[#C8932A] text-white'}`}>
+                                {adm.role === 'photographer' ? 'Photographer' : adm.role === 'vendor' ? 'Vendor' : 'Couple'}
+                              </span>
+                              {(!adm.role || adm.role === 'couple') && [
+                                { id: 'canDeletePosts', label: 'Delete Posts' },
+                                { id: 'canUploadImages', label: 'Upload Images' },
+                                { id: 'canSetAccessCode', label: 'Access Code' }
+                              ].map((p: any) => (
+                                <button
+                                  key={p.id}
+                                  onClick={() => togglePermission(adm.email, p.id, adm.permissions?.[p.id])}
+                                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${adm.permissions?.[p.id] ? 'bg-[#0E6B75] border-[#0E6B75] text-white shadow-md' : 'opacity-40 border-current'}`}
+                                >
+                                  {p.label}
+                                </button>
                               ))}
                             </div>
-                            <p className="text-[0.6rem] opacity-50 mt-3 italic">Upload an image for each day of the anniversary week. These will appear when users select the day in the programme.</p>
                           </div>
-                        </div>
+                        ))}
                       </div>
                     </div>
+                  </div>
                   )}
+                  <div className={`rounded-[20px] p-5 border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-white border-[#DAD8E3]'}`}>
+                    <h3 className="font-black font-display text-lg mb-4">Keep the memories</h3>
+                    <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                      <div className="min-w-0">
+                        <b className="block text-[0.95rem]">Download everything</b>
+                        <small className="block opacity-50 text-sm">Every photo and video in one zip, organised by event.</small>
+                      </div>
+                      <button onClick={onDownloadEverything} className="px-5 py-3 rounded-full bg-[#0E6B75] text-white text-[0.7rem] font-black uppercase tracking-widest shrink-0">Download</button>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <b className="block text-[0.95rem]">Memory book</b>
+                        <small className="block opacity-50 text-sm">A printable PDF of the best posts and wishes.</small>
+                      </div>
+                      <button onClick={onCreateMemoryBook} className="px-5 py-3 rounded-full border border-[#DAD8E3] dark:border-[#22363E] text-[0.7rem] font-black uppercase tracking-widest shrink-0">Create</button>
+                    </div>
+                  </div>
+                  <div className="rounded-[20px] p-5 border border-[#C4453B]/40">
+                    <h3 className="font-black font-display text-lg mb-1 text-[#C4453B]">Danger zone</h3>
+                    <p className="text-sm opacity-60 mb-3">Delete every guest post and wish. This cannot be undone.</p>
+                    <div className="flex gap-2 flex-wrap">
+                      <input value={dangerText} onChange={(e) => setDangerText(e.target.value.toUpperCase())} placeholder="TYPE DELETE" className={`${inputCls} max-w-[220px]`} />
+                      <button disabled={dangerText !== 'DELETE' || deleteAllBusy} onClick={async () => { setDeleteAllBusy(true); try { await onDeleteAllGuestData(); setDangerText(''); } finally { setDeleteAllBusy(false); } }} className="px-5 py-3 rounded-full bg-[#C4453B] text-white text-[0.7rem] font-black uppercase tracking-widest disabled:opacity-40">Delete everything</button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -4149,58 +6155,6 @@ function AdminDashboardModal({
                 </div>
               )}
 
-              {activeAdminTab === 'admins' && isSuper && (
-                <div className="space-y-6">
-                  <div>
-                    <label className="block text-[0.7rem] uppercase tracking-widest font-black mb-2 opacity-50">Add New Admin (Gmail)</label>
-                    <div className="flex gap-2">
-                      <input 
-                        type="email"
-                        value={newAdminEmail}
-                        onChange={(e) => setNewAdminEmail(e.target.value)}
-                        placeholder="resident@gmail.com"
-                        className={`flex-1 p-4 rounded-xl border-none outline-none font-bold transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-[#EEEDF3] text-[#14262D]'}`}
-                      />
-                      <button 
-                        onClick={handleAddAdmin}
-                        className="px-6 bg-[#0E6B75] text-white rounded-xl hover:scale-105 active:scale-95 transition-all"
-                      >
-                        <Plus className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <h4 className="text-[0.7rem] uppercase tracking-widest font-black opacity-50">Current Administrators</h4>
-                    {allAdmins.map((adm) => (
-                      <div key={adm.id} className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-[#0B171C] border-[#22363E]' : 'bg-[#F8F8FA] border-[#DAD8E3]'}`}>
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="font-bold text-sm">{adm.email}</span>
-                          <button onClick={() => handleRemoveAdmin(adm.email)} className="text-red-500 p-1 hover:bg-red-500/10 rounded-lg">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {[
-                            { id: 'canDeletePosts', label: 'Delete Posts' },
-                            { id: 'canUploadImages', label: 'Upload Images' },
-                            { id: 'canSetAccessCode', label: 'Access Code' }
-                          ].map(p => (
-                            <button
-                              key={p.id}
-                              onClick={() => togglePermission(adm.email, p.id, adm.permissions[p.id])}
-                              className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${adm.permissions[p.id] ? 'bg-[#0E6B75] border-[#0E6B75] text-white shadow-md' : 'opacity-40 border-current'}`}
-                            >
-                              {p.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {activeAdminTab === 'recycle' && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between mb-2">
@@ -4222,20 +6176,20 @@ function AdminDashboardModal({
                           <p className="text-xs font-bold truncate mb-1">By {dp.postData.authorName}</p>
                           <p className="text-[10px] opacity-40 line-clamp-2">{dp.postData.text}</p>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-col gap-2 shrink-0">
                           <button 
-                            onClick={() => onRestorePost(dp.id)}
-                            className="p-2 bg-[#0E6B75] text-white rounded-lg shadow-sm"
-                            title="Restore"
+                            onClick={() => setBinConfirm({ id: dp.id, action: 'restore' })}
+                            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-[#0E6B75] text-white rounded-xl shadow-sm text-[0.65rem] font-black uppercase tracking-widest active:scale-95 transition-transform"
                           >
-                            <RefreshCw className="w-4 h-4" />
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            Restore
                           </button>
                           <button 
-                            onClick={() => onPermanentDelete(dp.id)}
-                            className="p-2 bg-red-500 text-white rounded-lg shadow-sm"
-                            title="Erase"
+                            onClick={() => setBinConfirm({ id: dp.id, action: 'remove' })}
+                            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-red-500 text-white rounded-xl shadow-sm text-[0.65rem] font-black uppercase tracking-widest active:scale-95 transition-transform"
                           >
-                            <X className="w-4 h-4" />
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Remove
                           </button>
                         </div>
                       </div>
@@ -4248,29 +6202,28 @@ function AdminDashboardModal({
                   ))}
                 </div>
               )}
+
+              {binConfirm && (
+                <div className="fixed inset-0 z-[140] grid place-items-center bg-black/60 p-6" onClick={() => setBinConfirm(null)}>
+                  <div className={`w-full max-w-sm rounded-[24px] p-6 shadow-2xl ${isDarkMode ? 'bg-[#0B171C] text-white' : 'bg-white text-[#14262D]'}`} onClick={(e) => e.stopPropagation()}>
+                    <h3 className="font-display font-black text-xl mb-2">{binConfirm.action === 'restore' ? 'Restore this memory?' : 'Remove this memory forever?'}</h3>
+                    <p className="text-sm opacity-60 mb-6">{binConfirm.action === 'restore' ? 'It goes back to the feed exactly as it was.' : 'This deletes it permanently. It cannot be undone.'}</p>
+                    <div className="flex gap-3">
+                      <button onClick={() => setBinConfirm(null)} className="flex-1 py-3 rounded-xl border border-[#DAD8E3] dark:border-[#22363E] text-[0.7rem] font-black uppercase tracking-widest">Cancel</button>
+                      <button onClick={async () => { const target = binConfirm; setBinConfirm(null); if (target.action === 'restore') { await onRestorePost(target.id); showToast('Memory restored.', 'success'); } else { await onPermanentDelete(target.id); showToast('Removed permanently.', 'success'); } }} className={`flex-1 py-3 rounded-xl text-[0.7rem] font-black uppercase tracking-widest text-white ${binConfirm.action === 'restore' ? 'bg-[#0E6B75]' : 'bg-red-500'}`}>{binConfirm.action === 'restore' ? 'Restore' : 'Remove'}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* Admin preview: watch a video or view a photo from All posts full-screen. */}
+              {adminViewerPost && (
+                <MediaLightbox post={adminViewerPost} initialIndex={0} isDarkMode={isDarkMode} onClose={() => setAdminViewerPost(null)} />
+              )}
+              </TabErrorBoundary>
             </div>
 
-            {/* Modal Footer */}
-            <div className={`p-6 border-t ${isDarkMode ? 'border-[#22363E]' : 'border-[#DAD8E3]'}`}>
-              <div className="flex gap-4">
-                <button 
-                  onClick={() => {
-                    signOut(auth);
-                    onClose();
-                  }}
-                  className="flex-1 py-3 rounded-xl border-2 border-red-500/20 text-red-500 font-bold flex items-center justify-center gap-2 hover:bg-red-500/10 transition-all text-xs"
-                >
-                  <LogOut className="w-4 h-4" />
-                  Sign Out Admin
-                </button>
-                <button 
-                  onClick={onClose}
-                  className="flex-1 py-3 rounded-xl bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest hover:scale-[1.02] active:scale-95 transition-all shadow-lg shadow-[#0E6B75]/20"
-                >
-                  Done
-                </button>
-              </div>
             </div>
+
           </motion.div>
         </>
       )}
@@ -4279,34 +6232,32 @@ function AdminDashboardModal({
 }
 
 interface FloatingPhotoCardProps {
-  src: string;
-  left: string;
-  width: string;
-  initialRotate: number;
-  pairIndex: number;
-  totalPairs: number;
-  isRightLane: boolean;
+  images: string[];
+  imgOffset: number;
+  slot: number;
+  column: number;
   constraintsRef: React.RefObject<HTMLDivElement | null>;
+  eventNames?: string[];
 }
 
-const PAIR_TRAVERSE_SECONDS = 9; // Time for one pair of images to traverse the hero banner
+// Hero runs as a 2x2 grid: two cards in the upper half, two in the lower half, at all times.
+// Each column is a conveyor of four slots spaced half a screen apart; as the top card of a
+// column clears the banner it wraps to the bottom, so the grid never empties.
+const HERO_TRAVERSE_SECONDS = 11; // Time for one card to travel one screen height
 
-const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width, initialRotate, pairIndex, totalPairs, isRightLane, constraintsRef }) => {
+const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ images, imgOffset, slot, column, constraintsRef, eventNames }) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
   const y = useMotionValue(1000);
   const isHovered = useRef(false);
   const isDragging = useRef(false);
   const isTouching = useRef(false);
-  const [isPausedState, setIsPausedState] = useState(false);
   const initialized = useRef(false);
   const pxPerSecond = useRef(0);
+  const [imgIdx, setImgIdx] = useState(slot + imgOffset);
   const prefersReducedMotion = typeof window !== 'undefined' ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
 
-  const updatePausedState = () => {
-    const paused = isHovered.current || isDragging.current || isTouching.current;
-    setIsPausedState(paused);
-  };
+  const anyPaused = () => isHovered.current || isDragging.current || isTouching.current;
 
   useAnimationFrame((_, delta) => {
     if (!constraintsRef.current || !cardRef.current) return;
@@ -4314,40 +6265,41 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
     const containerHeight = constraintsRef.current.offsetHeight;
     const cardHeight = cardRef.current.offsetHeight || 220;
     const margin = 60;
-    // Distance between consecutive pairs: set to ~72% of containerHeight so that
-    // as the current pair approaches the top of the hero banner, the next pair of 2 images
-    // is already emerging from the bottom before the current pair disappears at the top.
-    const pairSpacing = Math.max(cardHeight + 70, containerHeight * 0.72);
-    const totalCycleLength = Math.max(containerHeight + cardHeight + margin, pairSpacing * Math.max(1, totalPairs));
+    const halfStep = containerHeight / 2;
+    const cycleLength = halfStep * 4;
 
     if (containerHeight === 0) return;
 
     if (!initialized.current) {
-      pxPerSecond.current = (containerHeight + cardHeight) / PAIR_TRAVERSE_SECONDS;
-      // Start pair 0 inside the lower half of the viewport while subsequent pairs follow at pairSpacing intervals
-      const laneStagger = isRightLane ? 30 : 0;
-      const startPos = (containerHeight * 0.65) + (pairIndex * pairSpacing) + laneStagger;
-      y.set(startPos);
+      pxPerSecond.current = (containerHeight + cardHeight) / HERO_TRAVERSE_SECONDS;
+      // Slot 0 sits in the upper half, slot 1 in the lower half; slots 2 and 3 wait below the fold
+      y.set(containerHeight * 0.12 + slot * halfStep);
       initialized.current = true;
     }
 
     const dt = Math.min(delta, 100) / 1000;
-    
+
     let speedMultiplier = 1.0;
-    if (isHovered.current || isDragging.current || isTouching.current) speedMultiplier = 0.15;
     if (prefersReducedMotion) speedMultiplier *= 0.05;
-    
+    // Only the card being hovered, dragged or touched pauses; the others keep moving.
+    if (isHovered.current || isDragging.current || isTouching.current) speedMultiplier = 0;
+
     let nextY = y.get() - (pxPerSecond.current * dt * speedMultiplier);
-    
+
     if (nextY < -(cardHeight + margin)) {
-      nextY += totalCycleLength;
-      x.set(0); 
+      nextY += cycleLength;
+      x.set(0);
+      setImgIdx((prev) => (prev + 4) % Math.max(1, images.length));
     }
-    
+
     if (!isDragging.current) {
       y.set(nextY);
     }
   });
+
+  const currentImage = images.length > 0 ? images[imgIdx % images.length] : PLACEHOLDER_IMAGES[imgIdx % PLACEHOLDER_IMAGES.length];
+  const caption = eventNames && eventNames.length > 0 ? eventNames[(imgIdx + imgOffset) % eventNames.length] : (EVENTS_DATA.length > 0 ? EVENTS_DATA[(imgIdx + imgOffset) % EVENTS_DATA.length].name : undefined);
+  const isPausedState = isHovered.current || isDragging.current || isTouching.current;
 
   return (
     <motion.div
@@ -4356,27 +6308,25 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
       dragMomentum={false}
       dragElastic={0}
       dragConstraints={constraintsRef}
-      onDragStart={() => { isDragging.current = true; updatePausedState(); }}
-      onDragEnd={() => { isDragging.current = false; updatePausedState(); }}
+      onDragStart={() => { isDragging.current = true; }}
+      onDragEnd={() => { isDragging.current = false; }}
       onPointerEnter={(e) => {
         if (e.pointerType === 'mouse') {
           isHovered.current = true;
-          updatePausedState();
         }
       }}
       onPointerLeave={(e) => {
         if (e.pointerType === 'mouse') {
           isHovered.current = false;
-          updatePausedState();
         }
       }}
-      onPointerDown={() => { isTouching.current = true; updatePausedState(); }}
-      onPointerUp={() => { isTouching.current = false; updatePausedState(); }}
-      onPointerCancel={() => { isTouching.current = false; updatePausedState(); }}
-      initial={{ rotate: initialRotate }}
-      style={{ 
-        left, 
-        width, 
+      onPointerDown={() => { isTouching.current = true; }}
+      onPointerUp={() => { isTouching.current = false; }}
+      onPointerCancel={() => { isTouching.current = false; }}
+      initial={{ rotate: column === 0 ? (slot % 2 === 0 ? -4 : 3) : (slot % 2 === 0 ? 3 : -4) }}
+      style={{
+        left: column === 0 ? '6%' : '54%',
+        width: 'clamp(150px, 42vw, 280px)',
         position: 'absolute',
         x,
         y,
@@ -4386,77 +6336,49 @@ const FloatingPhotoCard: React.FC<FloatingPhotoCardProps> = ({ src, left, width,
       className="cursor-grab active:cursor-grabbing select-none"
       whileHover={{ scale: 1.05, zIndex: 110 }}
     >
-      <div className={`bg-white p-2 pb-10 shadow-2xl rounded-sm ${isPausedState ? 'scale-110 shadow-black/40' : 'shadow-black/20'}`}>
-        <img 
-          src={src} 
-          className="w-full h-auto object-cover pointer-events-none" 
-          alt="" 
+      <div className={`bg-white p-2 pb-2 shadow-2xl rounded-sm ${isPausedState ? 'scale-110 shadow-black/40' : 'shadow-black/20'}`}>
+        <img
+          src={currentImage}
+          className="w-full max-h-[calc(32.5vh-80px)] sm:max-h-[calc(40vh-80px)] object-cover object-center pointer-events-none"
+          alt=""
           draggable={false}
         />
+        {caption && (
+          <p className="text-center text-[0.78rem] font-bold font-display text-[#14262D] pt-2 pb-1 leading-tight">{caption}</p>
+        )}
       </div>
     </motion.div>
   );
 }
 
-function FloatingHeroSection({ isDarkMode, images }: { isDarkMode: boolean, images: string[] }) {
+function FloatingHeroSection({ isDarkMode, images, eventNames }: { isDarkMode: boolean, images: string[], eventNames?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  
-  // 14 slot configurations paired into Left + Right lanes so 2 images scroll together at a time
-  const pairLaneConfigs = [
-    // Pair 1
-    { left: "6%", width: "clamp(135px, 38vw, 200px)", rotate: -6 },
-    { left: "54%", width: "clamp(135px, 38vw, 200px)", rotate: 5 },
-    // Pair 2
-    { left: "8%", width: "clamp(135px, 38vw, 200px)", rotate: 4 },
-    { left: "52%", width: "clamp(135px, 38vw, 200px)", rotate: -5 },
-    // Pair 3
-    { left: "5%", width: "clamp(135px, 38vw, 200px)", rotate: -4 },
-    { left: "55%", width: "clamp(135px, 38vw, 200px)", rotate: 6 },
-    // Pair 4
-    { left: "9%", width: "clamp(135px, 38vw, 200px)", rotate: 5 },
-    { left: "53%", width: "clamp(135px, 38vw, 200px)", rotate: -4 },
-    // Pair 5
-    { left: "7%", width: "clamp(135px, 38vw, 200px)", rotate: -5 },
-    { left: "54%", width: "clamp(135px, 38vw, 200px)", rotate: 4 },
-    // Pair 6
-    { left: "6%", width: "clamp(135px, 38vw, 200px)", rotate: 6 },
-    { left: "52%", width: "clamp(135px, 38vw, 200px)", rotate: -6 },
-    // Pair 7
-    { left: "8%", width: "clamp(135px, 38vw, 200px)", rotate: -4 },
-    { left: "54%", width: "clamp(135px, 38vw, 200px)", rotate: 5 },
-  ];
 
-  const cappedImages = images.slice(0, 14);
-  const totalPairs = Math.max(1, Math.ceil(cappedImages.length / 2));
+  const baseImages = images.length > 0 ? images : PLACEHOLDER_IMAGES;
 
   return (
-    <section 
+    <section
       ref={containerRef}
       className="relative w-screen left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] h-[65vh] sm:h-[80vh] overflow-hidden bg-[#0E6B75] mb-12 shadow-inner"
     >
       <div className="absolute inset-0 opacity-20 pointer-events-none">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.2),transparent)]" />
       </div>
-      
+
       <div className="absolute inset-0 overflow-hidden">
-        {cappedImages.map((src, i) => {
-          const config = pairLaneConfigs[i % pairLaneConfigs.length];
-          const pairIndex = Math.floor(i / 2);
-          const isRightLane = i % 2 === 1;
-          return (
-            <FloatingPhotoCard 
-              key={`${cappedImages.length}-${i}-${src}`} 
-              src={src} 
-              left={config.left} 
-              width={config.width} 
-              initialRotate={config.rotate} 
-              pairIndex={pairIndex}
-              totalPairs={totalPairs}
-              isRightLane={isRightLane}
+        {[0, 1].map((column) =>
+          [0, 1, 2, 3].map((slot) => (
+            <FloatingPhotoCard
+              key={`hero-${column}-${slot}`}
+              images={baseImages}
+              imgOffset={column * 2}
+              eventNames={eventNames}
+              slot={slot}
+              column={column}
               constraintsRef={containerRef}
             />
-          );
-        })}
+          ))
+        )}
       </div>
     </section>
   );
@@ -4475,29 +6397,31 @@ function ProfilePromptModal({ isOpen, onClose, onGoToSettings, isDarkMode }: any
             className="fixed inset-0 bg-black/60 z-[150] backdrop-blur-sm"
           />
           <motion.div 
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.9, opacity: 0 }}
-            className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-[340px] z-[151] rounded-[28px] p-8 shadow-2xl text-center ${isDarkMode ? 'bg-[#13232A] border border-[#22363E]' : 'bg-white border border-[#DAD8E3]'}`}
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className={`fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[520px] z-[151] rounded-t-[32px] p-6 pt-4 pb-10 shadow-2xl text-center ${isDarkMode ? 'bg-[#13232A] border-t border-[#22363E]' : 'bg-white border-t border-[#DAD8E3]'}`}
           >
+            <div className="w-12 h-1.5 bg-[#DAD8E3] dark:bg-[#22363E] rounded-full mx-auto mb-6" />
             <div className="w-20 h-20 rounded-full bg-[#0E6B75]/10 text-[#0E6B75] flex items-center justify-center mx-auto mb-6">
               <User className="w-10 h-10" />
             </div>
             <h3 className="text-xl font-black font-display tracking-tight mb-2">Set up your profile</h3>
-            <p className="text-sm opacity-60 mb-8">Please add your name and a profile picture before sharing memories with the community.</p>
+            <p className="text-sm opacity-60 mb-8">Please add your name and a profile picture before sharing memories with the guests.</p>
             
             <div className="flex flex-col gap-3">
               <button 
                 onClick={onGoToSettings}
                 className="w-full py-4 rounded-full bg-[#0E6B75] text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-[#0E6B75]/20 hover:scale-[1.02] active:scale-95 transition-all"
               >
-                Go to Profile Setup
+                Go to Settings
               </button>
               <button 
                 onClick={onClose}
                 className={`w-full py-4 rounded-full font-bold text-xs uppercase tracking-widest ${isDarkMode ? 'text-white/40' : 'text-[#5A6970]'}`}
               >
-                Maybe Later
+                Maybe later
               </button>
             </div>
           </motion.div>

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { verifyFirebaseIdToken, isVerifiedUser, getProjectId, unauthorized, notVerified } from './_verify';
 import { v2 as cloudinary } from 'cloudinary';
 
 function getCloudinaryCredentials() {
@@ -83,6 +84,14 @@ export const handler = async (event: any) => {
     };
   }
 
+  // Auth gate part 1: only a signed-in caller may upload through the proxy.
+  // The profile/access check runs below, once the target folder is known.
+  const caller = await verifyFirebaseIdToken(
+    event.headers?.authorization || event.headers?.Authorization,
+    getProjectId()
+  );
+  if (!caller) return unauthorized(headers);
+
   const { cloudName, apiKey, apiSecret } = getCloudinaryCredentials();
   if (!cloudName || !apiKey || !apiSecret) {
     return {
@@ -111,6 +120,7 @@ export const handler = async (event: any) => {
       const parsed = JSON.parse(rawBody.toString('utf-8'));
       const dataUrl = parsed.file || parsed.dataUrl;
       const folder = parsed.folder || 'ire-akari';
+      if (!(await isVerifiedUser(caller, getProjectId(), folder))) return notVerified(headers);
       if (!dataUrl) {
         return {
           statusCode: 400,
@@ -130,6 +140,7 @@ export const handler = async (event: any) => {
     }
 
     const { fileBuffer, mimeType, folder } = parseMultipart(rawBody, contentType);
+    if (!(await isVerifiedUser(caller, getProjectId(), folder))) return notVerified(headers);
     if (!fileBuffer) {
       return {
         statusCode: 400,

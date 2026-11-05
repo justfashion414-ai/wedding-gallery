@@ -52,7 +52,7 @@ service cloud.firestore {
       ) && (request.resource.data.text is string || request.resource.data.mediaUrls is list);
       allow update: if isSuperAdmin() || 
                        (isAdmin() && getAdminData().permissions.canDeletePosts == true) || 
-                       (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'loveCount', 'reports']));
+                       (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'loveCount', 'commentCount', 'reports']));
       allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
 
       match /reactions/{userId} {
@@ -61,6 +61,17 @@ service cloud.firestore {
                       request.resource.data.keys().hasOnly(['like', 'love', 'updatedAt']) &&
                       (request.resource.data.get('like', false) is bool) &&
                       (request.resource.data.get('love', false) is bool);
+      }
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid &&
+                      request.resource.data.text is string &&
+                      request.resource.data.text.size() > 0 &&
+                      request.resource.data.text.size() <= 500;
+        allow update: if false;
+        allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true) ||
+                      (isSignedIn() && resource.data.authorUid == request.auth.uid);
       }
     }
 
@@ -77,6 +88,13 @@ service cloud.firestore {
       allow read: if isSuperAdmin() || isAdmin();
       allow create: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
       allow update: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+    }
+
+    match /albums/{albumId} {
+      allow read: if true;
+      allow create: if isAdmin();
+      allow update: if isSuperAdmin();
       allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
     }
 

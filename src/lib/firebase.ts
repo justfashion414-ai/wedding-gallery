@@ -24,11 +24,10 @@ try {
       localCache: persistentLocalCache({
         tabManager: persistentMultipleTabManager(),
       }),
-    },
-    'ire-akari-database'
+    }
   );
 } catch {
-  firestoreDb = getFirestore(app, 'ire-akari-database');
+  firestoreDb = getFirestore(app);
 }
 
 export const db = firestoreDb;
