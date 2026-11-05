@@ -315,27 +315,28 @@ export const handler = async (event: any) => {
       if (!createRes.ok) {
         return json(500, { error: 'Ruleset creation failed', details: created });
       }
-      const releaseBase = `https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore`;
-      const attempts = [
-        { label: 'camel+mask', qs: '?update_mask=ruleset_name', body: JSON.stringify({ rulesetName: created.name }) },
-        { label: 'snake+mask', qs: '?update_mask=ruleset_name', body: JSON.stringify({ ruleset_name: created.name }) },
-        { label: 'camel', qs: '', body: JSON.stringify({ rulesetName: created.name }) },
-        { label: 'snake', qs: '', body: JSON.stringify({ ruleset_name: created.name }) }
+      const releaseName = `projects/${PROJECT_ID}/releases/cloud.firestore`;
+      const attempts: { label: string; method: string; url: string; body: string }[] = [
+        { label: 'patch-release-wrapper', method: 'PATCH', url: `https://firebaserules.googleapis.com/v1/${releaseName}?update_mask=ruleset_name`, body: JSON.stringify({ release: { name: releaseName, rulesetName: created.name } }) },
+        { label: 'patch-release-plain', method: 'PATCH', url: `https://firebaserules.googleapis.com/v1/${releaseName}`, body: JSON.stringify({ release: { name: releaseName, rulesetName: created.name } }) },
+        { label: 'create-release', method: 'POST', url: 'https://firebaserules.googleapis.com/v1/projects/' + PROJECT_ID + '/releases', body: JSON.stringify({ name: releaseName, rulesetName: created.name }) }
       ];
-      let releaseRes: Response | null = null;
-      let released: any = null;
-      let lastDetail: any = null;
+      let okResult: any = null;
+      const attemptResults: any[] = [];
       for (const attempt of attempts) {
-        releaseRes = await fetch(releaseBase + attempt.qs, { method: 'PATCH', headers, body: attempt.body });
-        const text = await releaseRes.text();
-        try { released = JSON.parse(text); } catch { released = text; }
-        if (releaseRes.ok) break;
-        lastDetail = released;
-        released = null;
+        try {
+          const res = await fetch(attempt.url, { method: attempt.method, headers, body: attempt.body });
+          const parsed = await res.json().catch(() => ({}));
+          attemptResults.push({ label: attempt.label, status: res.status, body: parsed });
+          if (res.ok) { okResult = parsed; break; }
+        } catch (err: any) {
+          attemptResults.push({ label: attempt.label, error: err && err.message });
+        }
       }
-      if (!releaseRes || !releaseRes.ok) {
-        return json(500, { error: 'Release update failed', ruleset: created.name, details: lastDetail });
+      if (!okResult) {
+        return json(500, { error: 'Release update failed', ruleset: created.name, attempts: attemptResults });
       }
+      const released = okResult;
       return json(200, { ok: true, ruleset: created.name, release: released });
     }
 
