@@ -91,6 +91,13 @@ service cloud.firestore {
       allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
     }
 
+    match /albums/{albumId} {
+      allow read: if true;
+      allow create: if isAdmin();
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+    }
+
     // 3. GLOBAL SAFETY NET (Last match wins if others don't allow)
     match /{document=**} {
       allow read, write: if false;

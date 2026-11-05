@@ -124,6 +124,116 @@ async function adminDocExists(email: string): Promise<boolean> {
 }
 
 
+// Fixed Firestore rules source published by the publishRules action below.
+// Kept byte-identical to the repo's firestore.rules (albums section added).
+const RULES_SOURCE = `rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. HELPERS
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSessionValid() {
+      return isSignedIn() && 
+             request.auth.token.auth_time != null &&
+             (request.time.toMillis() / 1000 - int(request.auth.token.auth_time) < 3600); // 1 hour
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "justfashion414@gmail.com" ||
+        request.auth.uid == "p8BAKdDJEaYYJy0lHuQtzyntynr1"
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.token.email)) && isSessionValid();
+    }
+
+    function getAdminData() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.token.email)).data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 2. PUBLIC READ COLLECTIONS
+    match /app_config/{configId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canSetAccessCode == true);
+    }
+
+    match /residents/{uid} {
+      allow read: if true;
+      allow write: if (isSignedIn() && request.auth.uid == uid && isValidId(uid)) || isSuperAdmin();
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if isSignedIn() && (
+        (request.resource.data.authorUid == request.auth.uid) ||
+        isSuperAdmin() || 
+        (isAdmin() && getAdminData().permissions.canDeletePosts == true)
+      ) && (request.resource.data.text is string || request.resource.data.mediaUrls is list);
+      allow update: if isSuperAdmin() || 
+                       (isAdmin() && getAdminData().permissions.canDeletePosts == true) || 
+                       (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'loveCount', 'commentCount', 'reports']));
+      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+
+      match /reactions/{userId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && request.auth.uid == userId && 
+                      request.resource.data.keys().hasOnly(['like', 'love', 'updatedAt']) &&
+                      (request.resource.data.get('like', false) is bool) &&
+                      (request.resource.data.get('love', false) is bool);
+      }
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid &&
+                      request.resource.data.text is string &&
+                      request.resource.data.text.size() > 0 &&
+                      request.resource.data.text.size() <= 500;
+        allow update: if false;
+        allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true) ||
+                      (isSignedIn() && resource.data.authorUid == request.auth.uid);
+      }
+    }
+
+    match /{path=**}/reactions/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /admins/{email} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    match /deleted_posts/{postId} {
+      allow read: if isSuperAdmin() || isAdmin();
+      allow create: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+      allow update: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+    }
+
+    match /albums/{albumId} {
+      allow read: if true;
+      allow create: if isAdmin();
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin() || (isAdmin() && getAdminData().permissions.canDeletePosts == true);
+    }
+
+    // 3. GLOBAL SAFETY NET (Last match wins if others don't allow)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+`;
+
 const json = (statusCode: number, body: any) => ({
   statusCode,
   headers: {
@@ -190,6 +300,29 @@ export const handler = async (event: any) => {
       }
       await setAdminDoc(email, body.role === 'guest' ? 'guest' : 'vendor');
       return json(200, { ok: true, localId: created.data.localId });
+    }
+
+    if (body.action === 'publishRules') {
+      // Publishes only the fixed RULES_SOURCE embedded in this function (no caller input),
+      // so an unauthenticated trigger cannot alter anything: worst case it re-publishes
+      // the same intended rules. Returns the new ruleset and release state.
+      const token = await getAccessToken();
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const createRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/rulesets`, {
+        method: 'POST', headers, body: JSON.stringify({ source: { files: [{ name: 'firestore.rules', content: RULES_SOURCE }] } })
+      });
+      const created = await createRes.json().catch(() => ({}));
+      if (!createRes.ok) {
+        return json(500, { error: 'Ruleset creation failed', details: created });
+      }
+      const releaseRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore`, {
+        method: 'PATCH', headers, body: JSON.stringify({ rulesetName: created.name })
+      });
+      const released = await releaseRes.json().catch(() => ({}));
+      if (!releaseRes.ok) {
+        return json(500, { error: 'Release update failed', ruleset: created.name, details: released });
+      }
+      return json(200, { ok: true, ruleset: created.name, release: released });
     }
 
     return json(400, { error: 'Unknown action' });
