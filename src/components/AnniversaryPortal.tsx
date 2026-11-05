@@ -5037,6 +5037,8 @@ function AdminDashboardModal({
                         const authorKey = p.authorUid || `name:${(p.authorName || '').trim().toLowerCase()}`;
                         const evName = (events || []).find((e) => e.id === p.eventId)?.name;
                         const when = p.timestamp?.toDate ? p.timestamp.toDate() : (p.createdAt?.toDate ? p.createdAt.toDate() : null);
+                        const media = (p.mediaUrls || [])[0];
+                        return (
                           <div key={p.id} className="flex items-center gap-3 p-4">
                             {/* Small preview: tap to watch a video or view the photo full-screen. */}
                             {(() => {
