@@ -2582,6 +2582,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                 onChange={(e) => setNewPostText(e.target.value)}
                 className={`mt-4 w-full min-h-[140px] p-4 rounded-2xl border-none outline-none resize-none text-[1.05rem] font-medium transition-colors ${isDarkMode ? 'bg-[#0B171C] text-white placeholder-[#5A6970]' : 'bg-[#EEEDF3] text-[#14262D] placeholder-[#93A4AB]'}`}
               />
+              <p className="text-[0.7rem] opacity-50 font-medium">Up to 5 photos, or one video on its own.</p>
               <div className="mt-6 flex items-center justify-between">
                 <div className="flex gap-2">
                   <input 
@@ -2593,13 +2594,29 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                     onChange={async (e) => {
                       const files = Array.from(e.target.files || []);
                       if (files.length === 0) return;
-                      
-                      const remaining = 5 - attachedMedia.length;
-                      const filesToAdd = files.slice(0, remaining);
-                      
-                      if (filesToAdd.length === 0) {
-                        showToast("Maximum 5 media files allowed per post.", "error");
+
+                      // One video per post, on its own; otherwise up to 5 photos.
+                      const vids = files.filter((f: File) => Boolean(f.type && f.type.startsWith('video/')));
+                      const imgs = files.filter((f: File) => !(f.type && f.type.startsWith('video/')));
+                      const hasVideoAttached = attachedMedia.some((m) => m.type === 'video');
+                      const rejectsVideo = vids.length > 1
+                        || (vids.length === 1 && (imgs.length > 0 || attachedMedia.length > 0))
+                        || (vids.length === 0 && hasVideoAttached);
+                      if (rejectsVideo) {
+                        showToast('One video at a time, on its own. Otherwise up to 5 photos.', 'error');
+                        e.target.value = '';
                         return;
+                      }
+
+                      const filesToAdd = vids.length === 1 ? vids : imgs.slice(0, Math.max(0, 5 - attachedMedia.length));
+
+                      if (filesToAdd.length === 0) {
+                        showToast('Maximum 5 photos allowed per post.', 'error');
+                        e.target.value = '';
+                        return;
+                      }
+                      if (vids.length === 0 && imgs.length > filesToAdd.length) {
+                        showToast(`You can attach up to 5 photos per post. Added the first ${filesToAdd.length}.`, 'error');
                       }
 
                       setIsUploading(true);
@@ -2740,7 +2757,7 @@ export default function AnniversaryPortal({ onBackToMain }: AnniversaryPortalPro
                         });
                         setUploadingPost(null);
 
-                        showToast(pendingFlag ? 'Shared. Waiting for the couple to approve' : 'Memory shared successfully!');
+                        showToast(pendingFlag ? 'Shared. Waiting for the couple to approve' : (approveGuestPosts ? 'Posted instantly. Only guest posts wait for approval.' : 'Memory shared successfully!'));
 
                       } catch (err) {
                         console.error("Post error:", err);
@@ -3217,6 +3234,76 @@ function MediaLightbox({ post, initialIndex, isDarkMode, onClose }: any) {
   );
 }
 
+// Swipeable carousel for posts with several photos: one slide fills the card,
+// swipe or the arrows move between them, dots track position, tap opens the lightbox.
+function MediaCarousel({ urls, mediaTypes, eventName, onOpenMedia }: { urls: string[]; mediaTypes?: string[]; eventName?: string; onOpenMedia: (i: number) => void }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [slide, setSlide] = useState(0);
+
+  const handleScroll = () => {
+    const el = trackRef.current;
+    if (!el || el.clientWidth === 0) return;
+    setSlide(Math.min(urls.length - 1, Math.max(0, Math.round(el.scrollLeft / el.clientWidth))));
+  };
+  const goTo = (i: number) => {
+    const el = trackRef.current;
+    if (!el) return;
+    el.scrollTo({ left: i * el.clientWidth, behavior: 'smooth' });
+  };
+
+  return (
+    <div className="mt-[10px] relative rounded-[18px] overflow-hidden border border-[#DAD8E3] dark:border-[#22363E] bg-black shadow-md">
+      {eventName && slide === 0 && (
+        <span className="absolute bottom-3 left-3 z-20 px-2.5 py-[3px] rounded-full bg-black/40 text-white text-[13px] pointer-events-none">{eventName}</span>
+      )}
+      {urls.length > 1 && (
+        <span className="absolute top-3 right-3 z-20 px-2 py-[2px] rounded-full bg-black/50 text-white text-[0.68rem] font-bold">{slide + 1}/{urls.length}</span>
+      )}
+      {urls.length > 1 && (
+        <>
+          <button type="button" aria-label="Previous photo" onClick={(e) => { e.stopPropagation(); goTo(Math.max(0, slide - 1)); }} className={`hidden sm:flex absolute left-2 top-1/2 -translate-y-1/2 z-20 w-9 h-9 rounded-full items-center justify-center bg-black/45 text-white hover:bg-black/65 transition-all ${slide === 0 ? 'opacity-0 pointer-events-none' : ''}`}><ChevronLeft className="w-5 h-5" /></button>
+          <button type="button" aria-label="Next photo" onClick={(e) => { e.stopPropagation(); goTo(Math.min(urls.length - 1, slide + 1)); }} className={`hidden sm:flex absolute right-2 top-1/2 -translate-y-1/2 z-20 w-9 h-9 rounded-full items-center justify-center bg-black/45 text-white hover:bg-black/65 transition-all ${slide === urls.length - 1 ? 'opacity-0 pointer-events-none' : ''}`}><ChevronRight className="w-5 h-5" /></button>
+        </>
+      )}
+      <div
+        ref={trackRef}
+        onScroll={handleScroll}
+        className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar"
+      >
+        {urls.map((url: string, i: number) => {
+          const isVideo = mediaTypes?.[i] === 'video' || url.toLowerCase().includes('.mp4') || url.toLowerCase().includes('.webm') || url.toLowerCase().includes('.mov') || url.includes('/video/');
+          return (
+            <div
+              key={i}
+              className={`relative w-full shrink-0 snap-center cursor-pointer group ${urls.length === 1 ? 'max-h-[420px]' : 'h-[340px] sm:h-[420px]'}`}
+              onClick={() => onOpenMedia(i)}
+            >
+              {isVideo ? (
+                <video src={url} className="w-full h-full object-cover" muted playsInline />
+              ) : (
+                <img src={url} className="w-full h-full object-cover" alt="" draggable={false} />
+              )}
+              {isVideo && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                  <Play className="w-8 h-8 text-white fill-current" />
+                </div>
+              )}
+              <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+          );
+        })}
+      </div>
+      {urls.length > 1 && (
+        <div className="absolute bottom-3 left-0 right-0 z-10 flex justify-center gap-1.5 pointer-events-none">
+          {urls.map((_, i) => (
+            <span key={i} className={`w-[6px] h-[6px] rounded-full transition-colors ${i === slide ? 'bg-white' : 'bg-white/40'}`} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Post({ 
   id, 
   name, 
@@ -3342,33 +3429,7 @@ function Post({
         )}
         
         {mediaUrls && mediaUrls.length > 0 && (
-          <div className={`mt-[10px] relative rounded-[18px] overflow-hidden border border-[#DAD8E3] dark:border-[#22363E] bg-black shadow-md ${mediaUrls.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
-            {eventName && (
-              <span className="absolute bottom-3 left-3 z-10 px-2.5 py-[3px] rounded-full bg-black/40 text-white text-[13px] pointer-events-none">{eventName}</span>
-            )}
-            {mediaUrls.map((url: string, i: number) => {
-              const isVideo = mediaTypes?.[i] === 'video' || url.toLowerCase().includes('.mp4') || url.toLowerCase().includes('.webm') || url.toLowerCase().includes('.mov') || url.includes('/video/');
-              return (
-                <div 
-                  key={i} 
-                  className={`relative cursor-pointer group ${mediaUrls.length === 1 ? 'max-h-[420px]' : 'aspect-square'}`}
-                  onClick={() => onOpenMedia(i)}
-                >
-                  {isVideo ? (
-                    <video src={url} className="w-full h-full object-cover" muted playsInline />
-                  ) : (
-                    <img src={url} className="w-full h-full object-cover" alt="" />
-                  )}
-                  {isVideo && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                      <Play className="w-8 h-8 text-white fill-current" />
-                    </div>
-                  )}
-                  <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
-              );
-            })}
-          </div>
+          <MediaCarousel urls={mediaUrls} mediaTypes={mediaTypes} eventName={eventName} onOpenMedia={onOpenMedia} />
         )}
 
         <div className="grid grid-cols-3 gap-2 w-full mt-3">
