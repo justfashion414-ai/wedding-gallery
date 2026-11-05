@@ -316,7 +316,6 @@ export const handler = async (event: any) => {
         return json(500, { error: 'Ruleset creation failed', details: created });
       }
       const releaseBase = `https://firebaserules.googleapis.com/v1/projects/${PROJECT_ID}/releases/cloud.firestore`;
-      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
       const attempts = [
         { label: 'camel+mask', qs: '?update_mask=ruleset_name', body: JSON.stringify({ rulesetName: created.name }) },
         { label: 'snake+mask', qs: '?update_mask=ruleset_name', body: JSON.stringify({ ruleset_name: created.name }) },
